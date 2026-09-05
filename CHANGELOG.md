@@ -2,7 +2,12 @@
 
 Release Please maintains this file from Conventional Commit messages.
 
-## Unreleased (v0.1.3)
+## Unreleased (v0.1.4)
+
+- Prefer hls.js/MSE over Chromium's misleading native HLS capability report.
+- Keep native HLS as a fallback for browsers with genuine native HLS support.
+- Increase the default live HLS playlist from 6 to 12 segments and retain more expired segments to reduce recovery-time 404s.
+- Log the selected browser playback path (`hls.js/MSE` or `native-HLS fallback`).
 
 - Stop silently swallowing browser `video.play()` failures; show an explicit “press Play” state when autoplay is blocked.
 - Report browser-side hls.js and media-element failures back into the Docker logs without exposing provider credentials.

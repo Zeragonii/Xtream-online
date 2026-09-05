@@ -258,3 +258,10 @@ If Auto mode successfully remuxes a source but hls.js reports a fatal browser me
 - Recently watched
 - Better stream health/reconnect telemetry
 - Optional hardware transcoding profiles
+
+
+### Browser playback path (v0.1.4)
+
+Xtream Online prefers **hls.js + MediaSource Extensions** on Chromium, Edge and Firefox. Native HLS is used only as a fallback for browsers with a genuine native HLS implementation (notably Safari). This avoids Chromium builds that advertise HLS via `canPlayType()` but fail to parse MPEG-TS HLS in the platform media pipeline.
+
+The Docker logs now include a `player-path` browser event so the selected playback engine is visible during troubleshooting.

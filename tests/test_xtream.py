@@ -270,3 +270,12 @@ def test_session_diagnostics_reports_hls_health_without_upstream(tmp_path):
     assert result["newest_segment_bytes"] == len(b"test-segment")
     assert upstream not in str(result)
     assert "secret-password" not in str(result)
+
+
+def test_frontend_prefers_hlsjs_before_native_hls():
+    from pathlib import Path
+
+    js = (Path(__file__).parents[1] / "app" / "static" / "app.js").read_text()
+    fn = js[js.index("function attachPlayer"):js.index("function destroyHls")]
+    assert fn.index("Hls.isSupported()") < fn.index('video.canPlayType("application/vnd.apple.mpegurl")')
+    assert 'reportClientEvent("player-path", "hls.js/MSE", "info")' in fn

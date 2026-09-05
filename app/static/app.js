@@ -345,13 +345,12 @@ function hlsErrorDetail(data) {
 }
 
 function attachPlayer(url, channel, result) {
-  if (video.canPlayType("application/vnd.apple.mpegurl")) {
-    video.src = url;
-    video.addEventListener("loadedmetadata", () => attemptVideoPlay(), { once: true });
-    return;
-  }
-
+  // Prefer hls.js anywhere MediaSource is available. Some Chromium builds
+  // report a truthy native-HLS canPlayType() result but then hand MPEG-TS HLS
+  // to the platform media pipeline, which can fail with
+  // DEMUXER_ERROR_COULD_NOT_PARSE. hls.js reliably transmuxes TS to fMP4/MSE.
   if (window.Hls && Hls.isSupported()) {
+    reportClientEvent("player-path", "hls.js/MSE", "info");
     state.hls = new Hls({
       enableWorker: true,
       lowLatencyMode: false,
@@ -395,6 +394,15 @@ function attachPlayer(url, channel, result) {
     // Load the playlist after MediaSource attachment so player startup follows
     // the canonical hls.js lifecycle and gives us deterministic diagnostics.
     state.hls.attachMedia(video);
+    return;
+  }
+
+  // Native HLS is the fallback path for browsers such as Safari where MSE /
+  // hls.js is unavailable but the media element has a real native HLS stack.
+  if (video.canPlayType("application/vnd.apple.mpegurl")) {
+    reportClientEvent("player-path", "native-HLS fallback", "info");
+    video.src = url;
+    video.addEventListener("loadedmetadata", () => attemptVideoPlay(), { once: true });
     return;
   }
 

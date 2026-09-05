@@ -173,7 +173,7 @@ class StreamSessionManager:
             "-hls_list_size",
             str(settings.hls_list_size),
             "-hls_delete_threshold",
-            "2",
+            "12",
             "-hls_flags",
             "delete_segments+omit_endlist",
             "-hls_segment_filename",
