@@ -10,6 +10,9 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      DATA_DIR: ${{ runner.temp }}/xtream-web-data
+      HLS_DIR: ${{ runner.temp }}/xtream-web-hls
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
