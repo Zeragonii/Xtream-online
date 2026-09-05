@@ -2,6 +2,13 @@
 
 Release Please maintains this file from Conventional Commit messages.
 
+## Unreleased (v0.1.6)
+
+- Display the running application version in the main UI.
+- Check GitHub in the background and show an update badge when a newer stable release or edge build is available.
+- Add a native Picture-in-Picture button so the live video can float outside the Xtream Online page.
+- Allow update checks to be disabled or tuned with Docker environment variables.
+
 ## Unreleased (v0.1.5)
 
 - Give the Channels pane its own fixed-height scrollbar, matching the independently scrollable Categories pane.

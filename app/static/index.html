@@ -14,7 +14,8 @@
         <p class="muted">Local Xtream Codes browser + FFmpeg HLS player</p>
       </div>
       <div class="top-actions">
-        <span id="version" class="chip">vdev</span>
+        <span id="version" class="chip" title="Current Xtream Online version">vdev</span>
+        <a id="updateBadge" class="chip update-chip hidden" href="#" target="_blank" rel="noopener">Update available</a>
         <button id="settingsBtn" class="ghost hidden" type="button">Provider</button>
       </div>
     </header>
@@ -86,7 +87,10 @@
         </div>
         <div class="player-footer">
           <span id="sessionInfo" class="muted">No active session</span>
-          <button id="stopBtn" class="danger ghost" type="button" disabled>Stop</button>
+          <div class="player-actions">
+            <button id="popoutBtn" class="ghost" type="button" disabled>Pop out</button>
+            <button id="stopBtn" class="danger ghost" type="button" disabled>Stop</button>
+          </div>
         </div>
       </section>
     </section>

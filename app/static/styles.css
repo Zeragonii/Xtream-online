@@ -61,6 +61,9 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 button.ghost { background: transparent; border-color: var(--border); color: var(--text); }
 button.danger { color: var(--danger); }
 .icon-button { background: transparent; border-color: var(--border); color: var(--muted); padding: 5px 9px; }
+.update-chip { color: var(--success); border-color: var(--success); text-decoration: none; }
+.update-chip:hover { background: rgba(63,185,80,.12); }
+.player-actions { display: flex; align-items: center; gap: 8px; }
 
 .app-grid {
   display: grid;

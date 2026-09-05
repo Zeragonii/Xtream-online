@@ -43,6 +43,8 @@ const stopBtn = $("stopBtn");
 const playbackMode = $("playbackMode");
 const settingsBtn = $("settingsBtn");
 const refreshBtn = $("refreshBtn");
+const updateBadge = $("updateBadge");
+const popoutBtn = $("popoutBtn");
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -185,10 +187,28 @@ async function ensureCatalog() {
   if (status.refreshing || !status.ready) scheduleCatalogPoll();
 }
 
+async function loadUpdateStatus() {
+  try {
+    const info = await api("/api/update/status");
+    updateBadge.classList.toggle("hidden", !info.available);
+    if (info.available) {
+      updateBadge.textContent = info.message || "Update available";
+      updateBadge.href = info.url || `https://github.com/${info.repository}`;
+      const latest = info.latest_version ? `latest v${info.latest_version}` : info.latest_commit ? `latest ${info.latest_commit.slice(0, 7)}` : "newer build available";
+      updateBadge.title = `Running v${info.current_version} • ${latest}`;
+    }
+  } catch (_) {
+    updateBadge.classList.add("hidden");
+  }
+}
+
 async function bootstrap() {
   try {
     const status = await api("/api/status");
     $("version").textContent = `v${status.version}`;
+    $("version").title = status.channel === "edge" && status.commit ? `Edge build ${status.commit.slice(0, 7)}` : `Xtream Online v${status.version}`;
+    loadUpdateStatus();
+    setInterval(loadUpdateStatus, 15 * 60 * 1000);
     state.configSource = status.configuration_source;
     if (status.configured) {
       setConfigured(true);
@@ -414,6 +434,7 @@ async function playChannel(channel, options = {}) {
   streamStatus.textContent = options.isFallback ? "Retrying with browser-safe transcode…" : "Starting FFmpeg session…";
   sessionInfo.textContent = "Opening provider stream…";
   stopBtn.disabled = true;
+  popoutBtn.disabled = true;
   renderChannels();
 
   destroyHls();
@@ -452,6 +473,7 @@ async function playChannel(channel, options = {}) {
     streamStatus.textContent = `${state.baseStreamStatus} • loading player…`;
     sessionInfo.textContent = `Session ${result.session_id.slice(0, 8)} • stream ${channel.stream_id}`;
     stopBtn.disabled = false;
+    popoutBtn.disabled = false;
     attachPlayer(result.playlist, channel, result);
   } catch (error) {
     if (serial === state.playSerial) {
@@ -571,6 +593,7 @@ async function stopPlayback() {
   video.removeAttribute("src");
   video.load();
   stopBtn.disabled = true;
+  popoutBtn.disabled = true;
   nowPlaying.textContent = "Nothing playing";
   streamStatus.textContent = "Choose a channel to start a session.";
   sessionInfo.textContent = "No active session";
@@ -581,6 +604,37 @@ async function stopPlayback() {
     } catch (_) {}
   }
 }
+
+async function togglePictureInPicture() {
+  if (!state.sessionId) return;
+  if (!document.pictureInPictureEnabled || typeof video.requestPictureInPicture !== "function") {
+    toast("Picture-in-Picture is not supported by this browser.");
+    return;
+  }
+  try {
+    if (document.pictureInPictureElement) {
+      await document.exitPictureInPicture();
+    } else {
+      if (video.readyState < 1) {
+        toast("Wait for the channel to begin playing before popping it out.");
+        return;
+      }
+      await video.requestPictureInPicture();
+    }
+  } catch (error) {
+    toast(`Could not pop out player: ${error?.message || error}`);
+  }
+}
+
+popoutBtn.addEventListener("click", togglePictureInPicture);
+video.addEventListener("enterpictureinpicture", () => {
+  popoutBtn.textContent = "Dock player";
+  reportClientEvent("picture-in-picture", "entered", "info");
+});
+video.addEventListener("leavepictureinpicture", () => {
+  popoutBtn.textContent = "Pop out";
+  reportClientEvent("picture-in-picture", "left", "info");
+});
 
 video.addEventListener("playing", () => {
   if (state.sessionId) {

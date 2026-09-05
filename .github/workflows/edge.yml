@@ -25,6 +25,11 @@ jobs:
           python -m compileall -q app tests
           pytest -q
 
+      - name: Read application version
+        id: app
+        shell: bash
+        run: echo "version=$(cat version.txt)" >> "$GITHUB_OUTPUT"
+
       - name: Resolve image name
         id: image
         shell: bash
@@ -44,6 +49,9 @@ jobs:
           push: true
           tags: ${{ steps.image.outputs.name }}:edge
           build-args: |
-            APP_VERSION=edge-${{ github.sha }}
+            APP_VERSION=${{ steps.app.outputs.version }}
+            APP_CHANNEL=edge
+            APP_COMMIT=${{ github.sha }}
+            APP_REPOSITORY=${{ github.repository }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

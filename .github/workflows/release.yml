@@ -70,5 +70,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             APP_VERSION=${{ needs.release.outputs.version }}
+            APP_CHANNEL=stable
+            APP_COMMIT=${{ github.sha }}
+            APP_REPOSITORY=${{ github.repository }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

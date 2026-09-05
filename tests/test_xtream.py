@@ -345,3 +345,36 @@ def test_frontend_pages_channels_and_has_independent_scrollbar():
     assert "/api/catalog/refresh" in js
     channel_rule = css[css.index(".channel-list {"):css.index("}", css.index(".channel-list {"))]
     assert "overflow-y: auto" in channel_rule
+
+
+
+def test_version_comparison_for_update_checker():
+    from app.update import _version_tuple
+
+    assert _version_tuple("0.1.6") == (0, 1, 6)
+    assert _version_tuple("v0.1.7") == (0, 1, 7)
+    assert _version_tuple("0.1.6-edge+abc") == (0, 1, 6)
+    assert _version_tuple("0.1.7") > _version_tuple("0.1.6")
+
+
+def test_frontend_has_update_badge_and_picture_in_picture():
+    from pathlib import Path
+
+    root = Path(__file__).parents[1]
+    html = (root / "app" / "static" / "index.html").read_text()
+    js = (root / "app" / "static" / "app.js").read_text()
+    assert 'id="updateBadge"' in html
+    assert 'id="popoutBtn"' in html
+    assert '/api/update/status' in js
+    assert 'requestPictureInPicture' in js
+    assert 'enterpictureinpicture' in js
+
+
+def test_edge_workflow_bakes_version_commit_and_channel():
+    from pathlib import Path
+
+    workflow = (Path(__file__).parents[1] / ".github" / "workflows" / "edge.yml").read_text()
+    assert "cat version.txt" in workflow
+    assert "APP_CHANNEL=edge" in workflow
+    assert "APP_COMMIT=${{ github.sha }}" in workflow
+    assert "APP_REPOSITORY=${{ github.repository }}" in workflow

@@ -26,6 +26,13 @@ A lightweight, LAN-first Xtream Codes web player. The provider credentials and u
 
 EPG, favourites, logos, VOD and series are intentionally deferred to later releases.
 
+### v0.1.6 version/update + Picture-in-Picture
+
+- Shows the running semantic version in the header.
+- Background update indicator checks the public GitHub repository; edge images compare their build commit with `main`, stable images compare against the latest GitHub release.
+- `Pop out` uses the browser Picture-in-Picture API to keep video floating above other windows.
+- `UPDATE_CHECK_ENABLED` and `UPDATE_CHECK_INTERVAL` control update checks.
+
 ### v0.1.5 catalogue/UI improvements
 
 - Categories and channels are cached persistently in SQLite.

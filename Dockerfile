@@ -9,7 +9,13 @@ RUN npm init -y >/dev/null 2>&1 \
 FROM python:3.13-slim
 
 ARG APP_VERSION=dev
+ARG APP_CHANNEL=dev
+ARG APP_COMMIT=""
+ARG APP_REPOSITORY=Zeragonii/xtream-online
 ENV APP_VERSION=${APP_VERSION} \
+    APP_CHANNEL=${APP_CHANNEL} \
+    APP_COMMIT=${APP_COMMIT} \
+    APP_REPOSITORY=${APP_REPOSITORY} \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     DATA_DIR=/data \
@@ -17,7 +23,9 @@ ENV APP_VERSION=${APP_VERSION} \
 
 LABEL org.opencontainers.image.title="Xtream Online" \
       org.opencontainers.image.description="Local Xtream Codes web player with managed FFmpeg HLS sessions" \
-      org.opencontainers.image.version="${APP_VERSION}"
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${APP_COMMIT}" \
+      org.opencontainers.image.source="https://github.com/${APP_REPOSITORY}"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg ca-certificates \

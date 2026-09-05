@@ -42,6 +42,12 @@ class Settings:
     m3u_timeout: float = max(2.0, _env_float("M3U_TIMEOUT", 6.0))
     xtream_stream_base_url: str | None = os.getenv("XTREAM_STREAM_BASE_URL") or None
     app_version: str = os.getenv("APP_VERSION", "dev")
+    app_channel: str = os.getenv("APP_CHANNEL", "dev").lower()
+    app_commit: str = os.getenv("APP_COMMIT", "")
+    app_repository: str = os.getenv("APP_REPOSITORY", "Zeragonii/xtream-online")
+    update_check_enabled: bool = os.getenv("UPDATE_CHECK_ENABLED", "true").lower() not in {"0", "false", "no", "off"}
+    update_check_interval: float = max(60.0, _env_float("UPDATE_CHECK_INTERVAL", 900.0))
+    update_check_timeout: float = max(1.0, _env_float("UPDATE_CHECK_TIMEOUT", 4.0))
 
     @property
     def db_path(self) -> Path:

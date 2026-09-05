@@ -16,6 +16,7 @@ from .config import settings
 from .sessions import SessionError, session_manager
 from .storage import ProviderConfig, catalog_store, provider_cache_key, store
 from .xtream import XtreamClient, XtreamError, normalize_base_url
+from .update import update_checker
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("xtream-online")
@@ -89,10 +90,17 @@ async def status() -> dict:
         "configuration_source": store.source(),
         "output": config.output if config else None,
         "version": settings.app_version,
+        "channel": settings.app_channel,
+        "commit": settings.app_commit or None,
         "max_active_streams": settings.max_active_streams,
         "idle_timeout": settings.session_idle_timeout,
         "default_ffmpeg_mode": settings.ffmpeg_mode,
     }
+
+
+@app.get("/api/update/status")
+async def update_status(force: bool = Query(default=False)) -> dict:
+    return await update_checker.status(force=force)
 
 
 @app.post("/api/config")
