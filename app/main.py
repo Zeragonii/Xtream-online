@@ -1,0 +1,206 @@
+from __future__ import annotations
+
+import logging
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+from .config import settings
+from .sessions import SessionError, session_manager
+from .storage import ProviderConfig, store
+from .xtream import XtreamClient, XtreamError, normalize_base_url
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger("xtream-web")
+
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await session_manager.start_background_tasks()
+    yield
+    await session_manager.shutdown()
+
+
+app = FastAPI(title="Xtream Web", version=settings.app_version, lifespan=lifespan)
+app.mount("/assets", StaticFiles(directory=STATIC_DIR), name="assets")
+
+
+class ProviderConfigRequest(BaseModel):
+    base_url: str = Field(min_length=1, max_length=2048)
+    username: str = Field(min_length=1, max_length=512)
+    password: str = Field(min_length=1, max_length=512)
+    output: str = "ts"
+
+
+class PlayRequest(BaseModel):
+    mode: str = "auto"
+
+
+def configured_client() -> XtreamClient:
+    config = store.get()
+    if not config:
+        raise HTTPException(status_code=409, detail="Xtream provider is not configured")
+    return XtreamClient(config)
+
+
+def api_error(exc: Exception, status_code: int = 502) -> HTTPException:
+    return HTTPException(status_code=status_code, detail=str(exc))
+
+
+@app.get("/", include_in_schema=False)
+async def index() -> FileResponse:
+    return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/api/health")
+async def health() -> dict:
+    return {
+        "status": "ok",
+        "version": settings.app_version,
+        "configured": store.get() is not None,
+        "active_streams": len(session_manager.sessions),
+    }
+
+
+@app.get("/api/status")
+async def status() -> dict:
+    config = store.get()
+    return {
+        "configured": config is not None,
+        "configuration_source": store.source(),
+        "output": config.output if config else None,
+        "version": settings.app_version,
+        "max_active_streams": settings.max_active_streams,
+        "idle_timeout": settings.session_idle_timeout,
+        "default_ffmpeg_mode": settings.ffmpeg_mode,
+    }
+
+
+@app.post("/api/config")
+async def configure_provider(payload: ProviderConfigRequest) -> dict:
+    if settings.env_xtream:
+        raise HTTPException(status_code=409, detail="Provider configuration is managed by environment variables")
+    if payload.output not in {"ts", "m3u8"}:
+        raise HTTPException(status_code=422, detail="Output must be ts or m3u8")
+
+    config = ProviderConfig(
+        base_url=normalize_base_url(payload.base_url),
+        username=payload.username,
+        password=payload.password,
+        output=payload.output,
+    )
+    client = XtreamClient(config)
+    try:
+        auth = await client.authenticate()
+    except XtreamError as exc:
+        raise api_error(exc, 400) from exc
+
+    store.save(config)
+    user_info = auth.get("user_info", {}) if isinstance(auth, dict) else {}
+    return {
+        "ok": True,
+        "status": user_info.get("status"),
+        "expires": user_info.get("exp_date"),
+    }
+
+
+@app.delete("/api/config")
+async def clear_provider() -> dict:
+    try:
+        store.clear()
+    except RuntimeError as exc:
+        raise api_error(exc, 409) from exc
+    await session_manager.stop_all()
+    return {"ok": True}
+
+
+@app.get("/api/categories")
+async def categories() -> list[dict]:
+    try:
+        return await configured_client().live_categories()
+    except XtreamError as exc:
+        raise api_error(exc) from exc
+
+
+@app.get("/api/channels")
+async def channels(category_id: str | None = Query(default=None)) -> list[dict]:
+    try:
+        return await configured_client().live_streams(category_id)
+    except XtreamError as exc:
+        raise api_error(exc) from exc
+
+
+@app.post("/api/play/{stream_id}")
+async def play(stream_id: int, payload: PlayRequest) -> dict:
+    client = configured_client()
+    mode = payload.mode if payload.mode in {"auto", "copy", "transcode"} else settings.ffmpeg_mode
+    try:
+        session = await session_manager.start(stream_id, client.stream_url(stream_id), mode)
+    except (SessionError, OSError) as exc:
+        logger.warning("Could not start stream %s: %s", stream_id, exc)
+        raise api_error(exc) from exc
+
+    return {
+        "session_id": session.id,
+        "stream_id": stream_id,
+        "playlist": f"/hls/{session.id}/index.m3u8",
+        "mode": session.mode,
+        "source_codecs": session.source_codecs,
+    }
+
+
+@app.delete("/api/session/{session_id}")
+async def stop_session(session_id: str) -> dict:
+    await session_manager.stop(session_id)
+    return {"ok": True}
+
+
+@app.post("/api/session/{session_id}/stop")
+async def stop_session_beacon(session_id: str) -> dict:
+    # POST twin used by navigator.sendBeacon() during tab/window teardown.
+    await session_manager.stop(session_id)
+    return {"ok": True}
+
+
+@app.get("/api/sessions")
+async def sessions() -> list[dict]:
+    return [
+        {
+            "session_id": session.id,
+            "stream_id": session.stream_id,
+            "mode": session.mode,
+            "source_codecs": session.source_codecs,
+        }
+        for session in session_manager.sessions.values()
+    ]
+
+
+@app.get("/hls/{session_id}/{filename}", include_in_schema=False)
+async def hls_file(session_id: str, filename: str):
+    session = await session_manager.touch(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Stream session not found")
+
+    if filename != "index.m3u8" and not (
+        filename.startswith("segment_") and filename.endswith(".ts") and filename[8:-3].isdigit()
+    ):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    path = session.directory / filename
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Segment not ready")
+
+    headers = {"Cache-Control": "no-store" if filename.endswith(".m3u8") else "no-cache"}
+    media_type = "application/vnd.apple.mpegurl" if filename.endswith(".m3u8") else "video/mp2t"
+    return FileResponse(path, media_type=media_type, headers=headers)
+
+
+@app.exception_handler(XtreamError)
+async def xtream_exception_handler(_, exc: XtreamError):
+    return JSONResponse(status_code=502, content={"detail": str(exc)})

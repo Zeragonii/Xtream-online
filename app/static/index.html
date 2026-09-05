@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Xtream Web</title>
+  <link rel="stylesheet" href="/assets/styles.css" />
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <div>
+        <h1>Xtream Web</h1>
+        <p class="muted">Local Xtream Codes browser + FFmpeg HLS player</p>
+      </div>
+      <div class="top-actions">
+        <span id="version" class="chip">vdev</span>
+        <button id="settingsBtn" class="ghost hidden" type="button">Provider</button>
+      </div>
+    </header>
+
+    <section id="setupPanel" class="card setup-card hidden">
+      <h2>Connect a provider</h2>
+      <p class="muted">Credentials are sent only to this server and are not exposed in playback URLs.</p>
+      <form id="setupForm" class="form-grid">
+        <label>
+          Server URL
+          <input id="baseUrl" name="base_url" placeholder="http://provider.example:8080" required />
+        </label>
+        <label>
+          Username
+          <input id="username" name="username" autocomplete="username" required />
+        </label>
+        <label>
+          Password
+          <input id="password" name="password" type="password" autocomplete="current-password" required />
+        </label>
+        <label>
+          Upstream format
+          <select id="output" name="output">
+            <option value="ts" selected>MPEG-TS (.ts)</option>
+            <option value="m3u8">HLS (.m3u8)</option>
+          </select>
+        </label>
+        <div class="form-actions">
+          <button id="connectBtn" type="submit">Connect</button>
+          <span id="setupMessage" class="muted"></span>
+        </div>
+      </form>
+    </section>
+
+    <section id="appPanel" class="app-grid hidden">
+      <aside class="sidebar card">
+        <div class="section-heading">
+          <h2>Categories</h2>
+          <button id="refreshBtn" class="icon-button" title="Refresh" type="button">↻</button>
+        </div>
+        <div id="categories" class="category-list"></div>
+      </aside>
+
+      <section class="channels card">
+        <div class="channel-toolbar">
+          <input id="search" type="search" placeholder="Search channels…" />
+          <span id="channelCount" class="muted"></span>
+        </div>
+        <div id="channelList" class="channel-list"></div>
+      </section>
+
+      <section class="player-card card">
+        <div class="player-heading">
+          <div>
+            <h2 id="nowPlaying">Nothing playing</h2>
+            <p id="streamStatus" class="muted">Choose a channel to start a session.</p>
+          </div>
+          <label class="mode-control">
+            FFmpeg
+            <select id="playbackMode">
+              <option value="auto" selected>Auto</option>
+              <option value="copy">Remux only</option>
+              <option value="transcode">Transcode</option>
+            </select>
+          </label>
+        </div>
+        <div class="video-wrap">
+          <video id="video" controls playsinline></video>
+        </div>
+        <div class="player-footer">
+          <span id="sessionInfo" class="muted">No active session</span>
+          <button id="stopBtn" class="danger ghost" type="button" disabled>Stop</button>
+        </div>
+      </section>
+    </section>
+
+    <div id="toast" class="toast hidden"></div>
+  </main>
+
+  <script src="/assets/vendor/hls.min.js"></script>
+  <script src="/assets/app.js"></script>
+</body>
+</html>

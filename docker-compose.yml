@@ -1,0 +1,22 @@
+services:
+  xtream-web:
+    image: ghcr.io/YOUR_GITHUB_USERNAME/xtream-web:latest
+    container_name: xtream-web
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - xtream-web-data:/data
+    environment:
+      TZ: Europe/London
+      MAX_ACTIVE_STREAMS: "1"
+      SESSION_IDLE_TIMEOUT: "35"
+      FFMPEG_MODE: auto
+      # Optional: configure the provider without using the setup page.
+      # XTREAM_URL: http://provider.example:8080
+      # XTREAM_USERNAME: username
+      # XTREAM_PASSWORD: password
+      # XTREAM_OUTPUT: ts
+
+volumes:
+  xtream-web-data:
