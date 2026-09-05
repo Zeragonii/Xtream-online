@@ -1,17 +1,20 @@
 services:
-  xtream-web:
-    image: ghcr.io/YOUR_GITHUB_USERNAME/xtream-web:latest
-    container_name: xtream-web
+  xtream-online:
+    image: ghcr.io/zeragonii/xtream-online:edge
+    container_name: xtream-online
     restart: unless-stopped
     ports:
       - "8080:8080"
     volumes:
-      - xtream-web-data:/data
+      - xtream-online-data:/data
     environment:
       TZ: Europe/London
       MAX_ACTIVE_STREAMS: "1"
       SESSION_IDLE_TIMEOUT: "35"
       FFMPEG_MODE: auto
+      PROVIDER_RELEASE_DELAY: "2.0"
+      # Optional override if a provider advertises an unusual stream host/port.
+      # XTREAM_STREAM_BASE_URL: http://provider.example:80
       # Optional: configure the provider without using the setup page.
       # XTREAM_URL: http://provider.example:8080
       # XTREAM_USERNAME: username
@@ -19,4 +22,4 @@ services:
       # XTREAM_OUTPUT: ts
 
 volumes:
-  xtream-web-data:
+  xtream-online-data:

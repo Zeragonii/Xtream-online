@@ -10,7 +10,7 @@ from pathlib import Path
 # volume used inside the Docker container. A normal test runner should never
 # need permission to create /data, so give every pytest session isolated,
 # writable temporary directories before app.config is imported.
-_test_root = Path(tempfile.mkdtemp(prefix="xtream-web-tests-"))
+_test_root = Path(tempfile.mkdtemp(prefix="xtream-online-tests-"))
 os.environ.setdefault("DATA_DIR", str(_test_root / "data"))
 os.environ.setdefault("HLS_DIR", str(_test_root / "hls"))
 

@@ -1,4 +1,4 @@
-# Xtream Web
+# Xtream Online
 
 A lightweight, LAN-first Xtream Codes web player. The provider credentials and upstream stream URLs stay on the server; the browser receives a clean channel/category API and a local HLS stream produced by FFmpeg.
 
@@ -36,7 +36,7 @@ Browser
   └── /hls/<session>/index.m3u8
           │
           ▼
-     Xtream Web
+     Xtream Online
       ├─ FastAPI
       ├─ SQLite config
       └─ FFmpeg session manager
@@ -49,7 +49,7 @@ The browser never receives the upstream `/live/<username>/<password>/<stream-id>
 
 ## Playback modes
 
-**Auto** runs `ffprobe` first. H.264 + AAC is remuxed with `-c copy`; other detected video/audio combinations are transcoded to H.264 + AAC for a conservative browser-compatible baseline. If probing fails, Auto chooses transcode rather than exposing the raw source.
+**Auto** opens the upstream only once in remux mode, then probes the first **local HLS segment**. H.264 + AAC stays on `-c copy`; other detected video/audio combinations are restarted as H.264 + AAC transcoding. This avoids the old upstream `ffprobe` connection that could temporarily consume the only slot on one-connection IPTV accounts.
 
 **Remux only** forces stream copy. This is the lowest CPU option and is ideal for H.264/AAC sources.
 
@@ -62,7 +62,7 @@ All playback is emitted as a short rolling HLS playlist. FFmpeg's HLS muxer is c
 Edit `docker-compose.yml` and change:
 
 ```yaml
-image: ghcr.io/YOUR_GITHUB_USERNAME/xtream-web:latest
+image: ghcr.io/zeragonii/xtream-online:edge
 ```
 
 Then:
@@ -77,7 +77,7 @@ Open:
 http://<docker-host-ip>:8080
 ```
 
-Enter the provider server URL, username and password on the setup page. The credentials are stored in `/data/xtream-web.db` inside the persistent volume.
+Enter the provider server URL, username and password on the setup page. The credentials are stored in `/data/xtream-online.db` inside the persistent volume.
 
 ### Portainer
 
@@ -91,11 +91,13 @@ The included `docker-compose.yml` can be pasted directly into a Portainer Stack 
 | `SESSION_IDLE_TIMEOUT` | `35` | Seconds without HLS requests before a session is killed |
 | `SESSION_START_TIMEOUT` | `15` | Seconds allowed for FFmpeg to produce its first HLS playlist |
 | `XTREAM_TIMEOUT` | `15` | Provider/API and FFmpeg HTTP timeout |
-| `FFPROBE_TIMEOUT` | `12` | Codec probe timeout |
+| `FFPROBE_TIMEOUT` | `8` | Local HLS codec probe timeout |
 | `FFMPEG_MODE` | `auto` | UI/default mode: `auto`, `copy`, or `transcode` |
 | `FFMPEG_VIDEO_ENCODER` | `libx264` | Video encoder used in transcode mode |
 | `FFMPEG_VIDEO_PRESET` | `veryfast` | FFmpeg video preset |
 | `FFMPEG_AUDIO_ENCODER` | `aac` | Audio encoder used in transcode mode |
+| `PROVIDER_RELEASE_DELAY` | `2.0` | Seconds to wait before reconnecting when Auto switches from remux to transcode |
+| `XTREAM_STREAM_BASE_URL` | unset | Optional manual streaming base override for unusual providers |
 | `HLS_TIME` | `2` | Target HLS segment length in seconds |
 | `HLS_LIST_SIZE` | `6` | Number of HLS segments retained in the live playlist |
 
@@ -143,8 +145,8 @@ The UI also explicitly stops the session when the Stop button is pressed and mak
 The Docker build vendors hls.js into the image, so no third-party JavaScript CDN is required at runtime.
 
 ```bash
-docker build -t xtream-web:dev .
-docker run --rm -p 8080:8080 -v xtream-web-data:/data xtream-web:dev
+docker build -t xtream-online:dev .
+docker run --rm -p 8080:8080 -v xtream-online-data:/data xtream-online:dev
 ```
 
 ## GitHub / GHCR workflow
@@ -195,7 +197,7 @@ A non-Docker local run also needs `ffmpeg`, `ffprobe`, and `app/static/vendor/hl
 
 ## Provider API calls used in v0.1
 
-Xtream Web currently uses the standard Player API operations:
+Xtream Online currently uses the standard Player API operations:
 
 ```text
 /player_api.php?username=...&password=...
@@ -204,11 +206,12 @@ Xtream Web currently uses the standard Player API operations:
 /player_api.php?...&action=get_live_streams&category_id=...
 ```
 
-The live input URL is constructed server-side from the configured provider and stream ID.
+For playback, Xtream Online also reads `server_info`, honours the provider's `allowed_output_formats`, optionally resolves the exact stream URL from `get.php`, and tries both common live URL layouts (`/live/<user>/<pass>/<id>` and `/<user>/<pass>/<id>`). If an HTTPS API endpoint is fronted separately from the live transport, an HTTP/80 fallback is included automatically. All of this resolution remains server-side.
 
 ## Security notes
 
 - Provider credentials never appear in the browser's playback URL.
+- INFO logging for `httpx`/`httpcore` is suppressed so Player API query strings containing credentials are not written to ordinary container logs.
 - Provider credentials stored through the UI are currently plaintext inside the SQLite database. Protect the `/data` volume accordingly.
 - FFmpeg stderr is redacted before being surfaced by the application so the complete upstream URL is not returned to the browser.
 - v0.1 is intended for a trusted LAN and does not implement application user accounts.

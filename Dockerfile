@@ -13,9 +13,9 @@ ENV APP_VERSION=${APP_VERSION} \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     DATA_DIR=/data \
-    HLS_DIR=/tmp/xtream-web/hls
+    HLS_DIR=/tmp/xtream-online/hls
 
-LABEL org.opencontainers.image.title="Xtream Web" \
+LABEL org.opencontainers.image.title="Xtream Online" \
       org.opencontainers.image.description="Local Xtream Codes web player with managed FFmpeg HLS sessions" \
       org.opencontainers.image.version="${APP_VERSION}"
 
@@ -30,8 +30,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY --from=hlsjs /vendor/hls.min.js /app/app/static/vendor/hls.min.js
 
-RUN mkdir -p /data /tmp/xtream-web/hls \
-    && chown -R 10001:10001 /data /tmp/xtream-web /app
+RUN mkdir -p /data /tmp/xtream-online/hls \
+    && chown -R 10001:10001 /data /tmp/xtream-online /app
 
 USER 10001:10001
 EXPOSE 8080

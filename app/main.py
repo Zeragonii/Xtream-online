@@ -15,7 +15,9 @@ from .storage import ProviderConfig, store
 from .xtream import XtreamClient, XtreamError, normalize_base_url
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-logger = logging.getLogger("xtream-web")
+logger = logging.getLogger("xtream-online")
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -27,7 +29,7 @@ async def lifespan(_: FastAPI):
     await session_manager.shutdown()
 
 
-app = FastAPI(title="Xtream Web", version=settings.app_version, lifespan=lifespan)
+app = FastAPI(title="Xtream Online", version=settings.app_version, lifespan=lifespan)
 app.mount("/assets", StaticFiles(directory=STATIC_DIR), name="assets")
 
 
@@ -141,7 +143,8 @@ async def play(stream_id: int, payload: PlayRequest) -> dict:
     client = configured_client()
     mode = payload.mode if payload.mode in {"auto", "copy", "transcode"} else settings.ffmpeg_mode
     try:
-        session = await session_manager.start(stream_id, client.stream_url(stream_id), mode)
+        candidates = await client.stream_candidates(stream_id)
+        session = await session_manager.start(stream_id, candidates, mode)
     except (SessionError, OSError) as exc:
         logger.warning("Could not start stream %s: %s", stream_id, exc)
         raise api_error(exc) from exc

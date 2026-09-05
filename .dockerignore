@@ -7,4 +7,4 @@ __pycache__
 *.pyd
 .env
 .env.*
-xtream-web.db
+xtream-online.db
