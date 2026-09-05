@@ -22,6 +22,8 @@ const state = {
   hlsNetworkRecoveries: 0,
   baseStreamStatus: "",
   catalogPollTimer: null,
+  epgPollTimer: null,
+  epgLoadSerial: 0,
   searchTimer: null,
 };
 
@@ -45,6 +47,9 @@ const settingsBtn = $("settingsBtn");
 const refreshBtn = $("refreshBtn");
 const updateBadge = $("updateBadge");
 const popoutBtn = $("popoutBtn");
+const epgList = $("epgList");
+const epgStatus = $("epgStatus");
+const epgRefreshBtn = $("epgRefreshBtn");
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -187,6 +192,150 @@ async function ensureCatalog() {
   if (status.refreshing || !status.ready) scheduleCatalogPoll();
 }
 
+function humanAge(seconds) {
+  if (seconds == null) return "never";
+  if (seconds < 60) return `${Math.round(seconds)}s ago`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m ago`;
+  return `${(seconds / 3600).toFixed(seconds < 7200 ? 1 : 0)}h ago`;
+}
+
+function humanInterval(seconds) {
+  if (!seconds) return "";
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  const hours = seconds / 3600;
+  return `${Number.isInteger(hours) ? hours : hours.toFixed(1)}h`;
+}
+
+function formatEpgTime(ts) {
+  return new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function updateEpgStatus(status) {
+  if (!status) return;
+  const interval = humanInterval(status.refresh_interval);
+  if (status.refreshing) {
+    epgStatus.textContent = `EPG syncing in background${interval ? ` • every ${interval}` : ""}`;
+    epgRefreshBtn.classList.add("spinning");
+  } else if (status.ready) {
+    epgStatus.textContent = `${status.programme_count.toLocaleString()} programmes • ${humanAge(status.age_seconds)}${interval ? ` • every ${interval}` : ""}`;
+    epgRefreshBtn.classList.remove("spinning");
+  } else if (status.last_error) {
+    epgStatus.textContent = `EPG sync failed: ${status.last_error}`;
+    epgRefreshBtn.classList.remove("spinning");
+  } else {
+    epgStatus.textContent = `Waiting for EPG cache${interval ? ` • every ${interval}` : ""}`;
+    epgRefreshBtn.classList.remove("spinning");
+  }
+}
+
+async function getEpgStatus() {
+  const status = await api("/api/epg/status");
+  updateEpgStatus(status);
+  return status;
+}
+
+function scheduleEpgPoll(delay = 1500) {
+  clearTimeout(state.epgPollTimer);
+  state.epgPollTimer = setTimeout(pollEpg, delay);
+}
+
+async function pollEpg() {
+  try {
+    const status = await getEpgStatus();
+    if (!status.ready && !status.refreshing) {
+      const result = await api("/api/epg/refresh", { method: "POST" });
+      updateEpgStatus({ ...result, refreshing: result.started || result.refreshing });
+      scheduleEpgPoll(result.last_error ? 5000 : 1500);
+      return;
+    }
+    if (status.refreshing) {
+      scheduleEpgPoll(1500);
+      return;
+    }
+    if (state.currentChannel) await loadEpg(state.currentChannel.stream_id);
+    await loadChannels(state.categoryId, { reset: true });
+  } catch (error) {
+    epgStatus.textContent = `EPG status unavailable: ${error.message}`;
+    scheduleEpgPoll(5000);
+  }
+}
+
+async function ensureEpg() {
+  const status = await getEpgStatus();
+  if (!status.ready && !status.refreshing) {
+    const result = await api("/api/epg/refresh", { method: "POST" });
+    updateEpgStatus({ ...result, refreshing: result.started || result.refreshing });
+  }
+  if (!status.ready || status.refreshing) scheduleEpgPoll();
+}
+
+function renderEpg(items, mapped = true) {
+  epgList.innerHTML = "";
+  if (!mapped) {
+    epgList.innerHTML = '<div class="epg-empty muted">This channel has no EPG mapping from the provider.</div>';
+    return;
+  }
+  if (!items.length) {
+    epgList.innerHTML = '<div class="epg-empty muted">No cached programme data for this channel yet.</div>';
+    return;
+  }
+
+  const now = Date.now() / 1000;
+  const fragment = document.createDocumentFragment();
+  for (const item of items) {
+    const current = item.start_ts <= now && item.stop_ts > now;
+    const row = document.createElement("div");
+    row.className = `epg-row ${current ? "current" : ""}`;
+
+    const time = document.createElement("div");
+    time.className = "epg-time";
+    time.textContent = current ? `NOW • ${formatEpgTime(item.stop_ts)}` : `${formatEpgTime(item.start_ts)}–${formatEpgTime(item.stop_ts)}`;
+
+    const info = document.createElement("div");
+    const title = document.createElement("div");
+    title.className = "epg-title";
+    title.textContent = item.title || "Untitled";
+    info.appendChild(title);
+
+    if (item.description) {
+      const desc = document.createElement("div");
+      desc.className = "epg-desc";
+      desc.textContent = item.description;
+      desc.title = item.description;
+      info.appendChild(desc);
+    }
+
+    if (current) {
+      const total = Math.max(1, item.stop_ts - item.start_ts);
+      const pct = Math.max(0, Math.min(100, ((now - item.start_ts) / total) * 100));
+      const progress = document.createElement("div");
+      progress.className = "epg-progress";
+      const fill = document.createElement("span");
+      fill.style.width = `${pct}%`;
+      progress.appendChild(fill);
+      info.appendChild(progress);
+    }
+
+    row.append(time, info);
+    fragment.appendChild(row);
+  }
+  epgList.appendChild(fragment);
+}
+
+async function loadEpg(streamId) {
+  const serial = ++state.epgLoadSerial;
+  try {
+    const result = await api(`/api/epg/channel/${streamId}`);
+    if (serial !== state.epgLoadSerial || !state.currentChannel || state.currentChannel.stream_id !== streamId) return;
+    updateEpgStatus(result.status);
+    renderEpg(result.items || [], result.mapped);
+    if (!result.status?.ready && !result.status?.refreshing) ensureEpg().catch(() => {});
+  } catch (error) {
+    if (serial !== state.epgLoadSerial) return;
+    epgList.innerHTML = `<div class="epg-empty muted">EPG unavailable: ${error.message}</div>`;
+  }
+}
+
 async function loadUpdateStatus() {
   try {
     const info = await api("/api/update/status");
@@ -218,6 +367,7 @@ async function bootstrap() {
       // These endpoints read only the local SQLite cache and never contact the provider.
       await Promise.all([loadCategories(), loadChannels(null, { reset: true })]);
       ensureCatalog().catch((error) => toast(`Catalogue sync failed: ${error.message}`));
+      ensureEpg().catch((error) => { epgStatus.textContent = `EPG sync failed: ${error.message}`; });
     } else {
       setConfigured(false);
     }
@@ -364,7 +514,16 @@ function renderChannels() {
     const isCurrent = state.streamId === channel.stream_id;
     const isPending = state.starting && state.pendingStreamId === channel.stream_id;
     button.className = `channel-row ${isCurrent || isPending ? "active" : ""}`;
-    button.textContent = isPending ? `${channel.name} …` : channel.name;
+    const name = document.createElement("span");
+    name.className = "channel-name";
+    name.textContent = isPending ? `${channel.name} …` : channel.name;
+    button.appendChild(name);
+    if (channel.now?.title) {
+      const now = document.createElement("span");
+      now.className = "channel-now";
+      now.textContent = `Now: ${channel.now.title}`;
+      button.appendChild(now);
+    }
     button.disabled = state.starting;
     button.addEventListener("click", () => playChannel(channel));
     fragment.appendChild(button);
@@ -420,6 +579,7 @@ async function playChannel(channel, options = {}) {
 
   if (!options.isFallback) state.autoFallbackAttempted = false;
   state.currentChannel = channel;
+  loadEpg(channel.stream_id).catch(() => {});
   state.lastPlayResult = null;
   state.hlsNetworkRecoveries = 0;
 
@@ -596,6 +756,7 @@ async function stopPlayback() {
   popoutBtn.disabled = true;
   nowPlaying.textContent = "Nothing playing";
   streamStatus.textContent = "Choose a channel to start a session.";
+  epgList.innerHTML = '<div class="epg-empty muted">Choose a channel to view its schedule.</div>';
   sessionInfo.textContent = "No active session";
   renderChannels();
   if (sessionId) {
@@ -659,6 +820,21 @@ video.addEventListener("error", async () => {
   streamStatus.textContent = `${state.baseStreamStatus} • ${detail}`;
   await reportClientEvent("video-error", detail);
   await forceBrowserSafeTranscode(detail);
+});
+
+epgRefreshBtn.addEventListener("click", async () => {
+  if (epgRefreshBtn.disabled) return;
+  epgRefreshBtn.disabled = true;
+  try {
+    const result = await api("/api/epg/refresh", { method: "POST" });
+    updateEpgStatus({ ...result, refreshing: result.started || result.refreshing });
+    toast(result.started ? "EPG refresh started in background" : "EPG refresh already running", "success");
+    scheduleEpgPoll(500);
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    epgRefreshBtn.disabled = false;
+  }
 });
 
 stopBtn.addEventListener("click", stopPlayback);

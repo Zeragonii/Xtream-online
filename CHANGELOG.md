@@ -2,6 +2,16 @@
 
 Release Please maintains this file from Conventional Commit messages.
 
+## Unreleased (v0.1.7)
+
+- Add a persistent background XMLTV/EPG cache backed by SQLite.
+- Add configurable `EPG_REFRESH_INTERVAL` with a conservative 6-hour default.
+- Preserve Xtream `epg_channel_id` mappings in the cached channel catalogue.
+- Show current programme titles directly in channel rows when available.
+- Add a scrollable selected-channel guide with Now/Next/upcoming programmes and current-programme progress.
+- Add non-blocking EPG status and manual refresh controls.
+- Filter imported XMLTV data to mapped channels and a bounded past/future time window.
+
 ## Unreleased (v0.1.6)
 
 - Display the running application version in the main UI.

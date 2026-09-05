@@ -24,7 +24,17 @@ A lightweight, LAN-first Xtream Codes web player. The provider credentials and u
 - Release Please semantic versioning + GitHub releases
 - Stable GHCR image tags when a release is created
 
-EPG, favourites, logos, VOD and series are intentionally deferred to later releases.
+Favourites, logos, VOD and series are intentionally deferred to later releases.
+
+
+### v0.1.7 EPG
+
+- Downloads the provider XMLTV feed in the background and stores a parsed guide in SQLite.
+- The browser never queries the provider for EPG data directly.
+- The default EPG refresh interval is 6 hours and is configurable with `EPG_REFRESH_INTERVAL`.
+- Only channels present in the cached Xtream catalogue are imported, and programme data is bounded to a configurable time window.
+- Channel rows show the current programme when available.
+- The player column includes a scrollable current/upcoming programme guide with a manual background refresh button.
 
 ### v0.1.6 version/update + Picture-in-Picture
 
@@ -64,7 +74,8 @@ Browser
      Xtream Online      │
       ├─ FastAPI        │
       ├─ background catalogue refresher ───► Xtream Player API
-      ├─ SQLite config/cache
+      ├─ background EPG refresher ─────────► Xtream XMLTV feed
+      ├─ SQLite config/catalogue/EPG cache
       └─ FFmpeg session manager ────────────► Xtream live stream
 ```
 
@@ -122,6 +133,11 @@ The included `docker-compose.yml` can be pasted directly into a Portainer Stack 
 | `PROVIDER_RELEASE_DELAY` | `0.5` | Seconds to wait before reconnecting when Auto switches from remux to transcode |
 | `PROVIDER_CACHE_TTL` | `600` | Seconds to cache Player API auth/server metadata for playback |
 | `CATALOG_REFRESH_INTERVAL` | `900` | Seconds between background category/channel catalogue refreshes |
+| `EPG_REFRESH_INTERVAL` | `21600` | Seconds between background XMLTV/EPG refreshes (default 6 hours) |
+| `EPG_TIMEOUT` | `60` | Maximum seconds allowed for the XMLTV download |
+| `EPG_MAX_BYTES` | `150000000` | Hard maximum XMLTV download size in bytes |
+| `EPG_HORIZON_HOURS` | `72` | Future guide window retained in SQLite |
+| `EPG_PAST_HOURS` | `6` | Previous programme hours retained in SQLite |
 | `M3U_TIMEOUT` | `6` | Timeout for last-resort `get.php` stream discovery |
 | `XTREAM_STREAM_BASE_URL` | unset | Optional manual streaming base override for unusual providers |
 | `HLS_TIME` | `2` | Target HLS segment length in seconds |
@@ -227,6 +243,22 @@ The browser-facing category and channel APIs do **not** query the Xtream provide
 
 The channel API is paged (`offset`, `limit`) and supports server-side cached search (`q`) plus `category_id`, so the browser never needs to create tens of thousands of channel buttons at once.
 
+
+## EPG cache
+
+Xtream Online uses the provider's standard `xmltv.php` feed as a bulk background source. The XMLTV file is downloaded once per refresh cycle, parsed server-side, filtered to the `epg_channel_id` values present in the cached live-channel catalogue, and atomically stored in SQLite. Browser requests for channel rows or the selected-channel guide read SQLite only.
+
+The default is deliberately conservative:
+
+```yaml
+environment:
+  EPG_REFRESH_INTERVAL: "21600"  # 6 hours
+```
+
+Useful alternatives are `3600` for hourly, `14400` for every 4 hours, `43200` for every 12 hours, or `86400` for daily. A manual EPG refresh button in the UI starts the same background job without blocking playback or navigation.
+
+The importer keeps six hours of past data and 72 hours of future data by default. This avoids permanently storing an entire provider guide when only the current and near-future schedule is useful.
+
 ## Provider API calls used in v0.1
 
 Xtream Online currently uses the standard Player API operations:
@@ -235,7 +267,7 @@ Xtream Online currently uses the standard Player API operations:
 /player_api.php?username=...&password=...
 /player_api.php?...&action=get_live_categories
 /player_api.php?...&action=get_live_streams
-/player_api.php?...&action=get_live_streams
+/xmltv.php?username=...&password=...
 ```
 
 For playback, Xtream Online reads and caches `server_info`, honours the provider's `allowed_output_formats`, and tries both common live URL layouts (`/live/<user>/<pass>/<id>` and `/<user>/<pass>/<id>`). The first successful route is learned in memory and tried first on later channel changes. If normal Xtream routes all fail, `get.php` M3U resolution is used only as a last-resort fallback. If an HTTPS API endpoint is fronted separately from the live transport, an HTTP/80 fallback is included automatically. All resolution remains server-side.
@@ -272,8 +304,6 @@ If Auto mode successfully remuxes a source but hls.js reports a fatal browser me
 
 ## v0.2 candidates
 
-- XMLTV / Xtream EPG
-- Current/next programme data
 - Channel logos proxied through the backend
 - Favourites
 - Recently watched

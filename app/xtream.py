@@ -141,7 +141,7 @@ class XtreamClient:
         return httpx.AsyncClient(
             timeout=timeout or settings.xtream_timeout,
             follow_redirects=True,
-            headers={"User-Agent": "Xtream-Online/0.1.5"},
+            headers={"User-Agent": f"Xtream-Online/{settings.app_version}"},
         )
 
     async def _get(self, action: str | None = None, **extra: str | int) -> object:
@@ -215,9 +215,37 @@ class XtreamClient:
                     "name": str(item.get("name", f"Channel {stream_id}")),
                     "category_id": str(item.get("category_id", "")),
                     "tv_archive": bool(int(item.get("tv_archive", 0) or 0)),
+                    "epg_channel_id": str(item.get("epg_channel_id") or "") or None,
                 }
             )
         return streams
+
+    @property
+    def xmltv_url(self) -> str:
+        username = quote(self.config.username, safe="")
+        password = quote(self.config.password, safe="")
+        return f"{self.config.base_url}/xmltv.php?username={username}&password={password}"
+
+    async def download_xmltv(self, destination) -> int:
+        """Download the provider XMLTV feed once, with a hard size limit."""
+        total = 0
+        try:
+            async with self._client(settings.epg_timeout) as client:
+                async with client.stream("GET", self.xmltv_url) as response:
+                    response.raise_for_status()
+                    with open(destination, "wb") as handle:
+                        async for chunk in response.aiter_bytes(1024 * 256):
+                            total += len(chunk)
+                            if total > settings.epg_max_bytes:
+                                raise XtreamError(
+                                    f"EPG feed exceeded configured EPG_MAX_BYTES ({settings.epg_max_bytes} bytes)"
+                                )
+                            handle.write(chunk)
+        except httpx.HTTPStatusError as exc:
+            raise XtreamError(f"EPG request returned HTTP {exc.response.status_code}") from exc
+        except httpx.RequestError as exc:
+            raise XtreamError(f"EPG request failed: {exc.__class__.__name__}") from exc
+        return total
 
     def _add_route_candidate(self, candidates: list[str], stream_id: int, route: LearnedRoute) -> None:
         try:

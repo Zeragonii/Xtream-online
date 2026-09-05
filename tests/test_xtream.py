@@ -378,3 +378,78 @@ def test_edge_workflow_bakes_version_commit_and_channel():
     assert "APP_CHANNEL=edge" in workflow
     assert "APP_COMMIT=${{ github.sha }}" in workflow
     assert "APP_REPOSITORY=${{ github.repository }}" in workflow
+
+
+def test_xmltv_parser_filters_channels_and_window(tmp_path):
+    from app.epg import parse_xmltv_file
+
+    xml = '''<?xml version="1.0" encoding="UTF-8"?>
+    <tv>
+      <channel id="bbc1.uk"><display-name>BBC One</display-name></channel>
+      <programme start="20260905200000 +0100" stop="20260905210000 +0100" channel="bbc1.uk">
+        <title>Evening News</title><desc>Today's headlines.</desc><category>News</category>
+      </programme>
+      <programme start="20260905210000 +0100" stop="20260905220000 +0100" channel="other.uk">
+        <title>Wrong Channel</title>
+      </programme>
+    </tv>'''
+    path = tmp_path / "guide.xml"
+    path.write_text(xml)
+    items = parse_xmltv_file(path, {"bbc1.uk"}, earliest_ts=0, latest_ts=9999999999)
+    assert len(items) == 1
+    assert items[0]["title"] == "Evening News"
+    assert items[0]["description"] == "Today's headlines."
+    assert items[0]["category"] == "News"
+
+
+def test_catalog_retains_epg_channel_id_and_epg_cache_joins_now():
+    from app.storage import catalog_store, epg_store, provider_cache_key
+    import time
+
+    config = ProviderConfig(base_url="http://epg-provider.example", username="epg-user", password="epg-pass", output="ts")
+    key = provider_cache_key(config)
+    catalog_store.clear()
+    epg_store.clear()
+    catalog_store.replace(
+        key,
+        [{"category_id": "1", "category_name": "General", "parent_id": 0}],
+        [{"stream_id": 42, "name": "Test TV", "category_id": "1", "tv_archive": False, "epg_channel_id": "test.tv"}],
+    )
+    now = time.time()
+    epg_store.replace(
+        key,
+        [{
+            "epg_channel_id": "test.tv",
+            "start_ts": now - 600,
+            "stop_ts": now + 1200,
+            "title": "Current Show",
+            "description": "Description",
+            "category": "Entertainment",
+        }],
+    )
+    rows, total = catalog_store.channels(key, category_id=None, search="", offset=0, limit=10)
+    assert total == 1
+    assert rows[0]["epg_channel_id"] == "test.tv"
+    current = epg_store.now_for_streams(key, [42], now=now)
+    assert current[42]["title"] == "Current Show"
+    schedule = epg_store.schedule(key, "test.tv", now=now, limit=10)
+    assert schedule[0]["title"] == "Current Show"
+
+
+def test_epg_frontend_and_refresh_controls_exist():
+    from pathlib import Path
+
+    root = Path(__file__).parents[1]
+    html = (root / "app" / "static" / "index.html").read_text()
+    js = (root / "app" / "static" / "app.js").read_text()
+    css = (root / "app" / "static" / "styles.css").read_text()
+    assert 'id="epgList"' in html
+    assert 'id="epgRefreshBtn"' in html
+    assert '/api/epg/channel/' in js
+    assert '/api/epg/refresh' in js
+    assert '.epg-list' in css and 'overflow-y: auto' in css
+
+
+def test_epg_refresh_interval_is_configurable():
+    from app.config import settings
+    assert settings.epg_refresh_interval >= 300

@@ -85,6 +85,18 @@
         <div class="video-wrap">
           <video id="video" controls playsinline></video>
         </div>
+        <section class="epg-panel">
+          <div class="epg-heading">
+            <div>
+              <h3>Guide</h3>
+              <span id="epgStatus" class="muted">EPG cache not loaded</span>
+            </div>
+            <button id="epgRefreshBtn" class="icon-button" title="Refresh EPG now" type="button">↻</button>
+          </div>
+          <div id="epgList" class="epg-list">
+            <div class="epg-empty muted">Choose a channel to view its schedule.</div>
+          </div>
+        </section>
         <div class="player-footer">
           <span id="sessionInfo" class="muted">No active session</span>
           <div class="player-actions">

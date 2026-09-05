@@ -13,8 +13,9 @@ from pydantic import BaseModel, Field
 
 from .catalog import catalog_service
 from .config import settings
+from .epg import epg_service
 from .sessions import SessionError, session_manager
-from .storage import ProviderConfig, catalog_store, provider_cache_key, store
+from .storage import ProviderConfig, catalog_store, epg_store, provider_cache_key, store
 from .xtream import XtreamClient, XtreamError, normalize_base_url
 from .update import update_checker
 
@@ -30,7 +31,9 @@ STATIC_DIR = Path(__file__).parent / "static"
 async def lifespan(_: FastAPI):
     await session_manager.start_background_tasks()
     await catalog_service.start()
+    await epg_service.start()
     yield
+    await epg_service.shutdown()
     await catalog_service.shutdown()
     await session_manager.shutdown()
 
@@ -124,6 +127,7 @@ async def configure_provider(payload: ProviderConfigRequest) -> dict:
 
     store.save(config)
     catalog_store.clear()
+    epg_store.clear()
     await catalog_service.request_refresh(force=True)
     user_info = auth.get("user_info", {}) if isinstance(auth, dict) else {}
     return {
@@ -142,6 +146,7 @@ async def clear_provider() -> dict:
         raise api_error(exc, 409) from exc
     await session_manager.stop_all()
     catalog_store.clear()
+    epg_store.clear()
     return {"ok": True}
 
 
@@ -156,6 +161,43 @@ async def refresh_catalog() -> dict:
     started = await catalog_service.request_refresh(force=True)
     status = await catalog_service.status()
     return {"ok": True, "started": started, **status}
+
+
+@app.get("/api/epg/status")
+async def epg_status() -> dict:
+    return await epg_service.status()
+
+
+@app.post("/api/epg/refresh")
+async def refresh_epg() -> dict:
+    configured_client()
+    started = await epg_service.request_refresh(force=True)
+    status = await epg_service.status()
+    return {"ok": True, "started": started, **status}
+
+
+@app.get("/api/epg/channel/{stream_id}")
+async def channel_epg(stream_id: int, limit: int = Query(default=16, ge=1, le=50)) -> dict:
+    config = store.get()
+    if not config:
+        raise HTTPException(status_code=409, detail="Xtream provider is not configured")
+    key = provider_cache_key(config)
+    epg_channel_id = await asyncio.to_thread(catalog_store.epg_channel_for_stream, key, stream_id)
+    status = await epg_service.status()
+    if not status["ready"] and not status["refreshing"]:
+        await epg_service.request_refresh(force=False)
+    if not epg_channel_id:
+        return {"stream_id": stream_id, "mapped": False, "items": [], "status": status}
+    items = await asyncio.to_thread(
+        epg_store.schedule, key, epg_channel_id, now=time.time(), limit=limit
+    )
+    return {
+        "stream_id": stream_id,
+        "mapped": True,
+        "epg_channel_id": epg_channel_id,
+        "items": items,
+        "status": status,
+    }
 
 
 @app.get("/api/categories")
@@ -192,6 +234,13 @@ async def channels(
     status = await catalog_service.status()
     if not status["ready"]:
         await catalog_service.request_refresh(force=False)
+    if items:
+        now_map = await asyncio.to_thread(
+            epg_store.now_for_streams, key, [int(item["stream_id"]) for item in items], now=time.time()
+        )
+        for item in items:
+            item["now"] = now_map.get(int(item["stream_id"]))
+    await epg_service.request_refresh(force=False)
     return {
         "items": items,
         "total": total,
