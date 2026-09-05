@@ -7,6 +7,9 @@ const state = {
   streamId: null,
   hls: null,
   configSource: null,
+  starting: false,
+  pendingStreamId: null,
+  playSerial: 0,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -173,8 +176,11 @@ function renderChannels() {
   for (const channel of state.filteredChannels) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `channel-row ${state.streamId === channel.stream_id ? "active" : ""}`;
-    button.textContent = channel.name;
+    const isCurrent = state.streamId === channel.stream_id;
+    const isPending = state.starting && state.pendingStreamId === channel.stream_id;
+    button.className = `channel-row ${isCurrent || isPending ? "active" : ""}`;
+    button.textContent = isPending ? `${channel.name} …` : channel.name;
+    button.disabled = state.starting;
     button.addEventListener("click", () => playChannel(channel));
     fragment.appendChild(button);
   }
@@ -193,23 +199,50 @@ $("refreshBtn").addEventListener("click", async () => {
 });
 
 async function playChannel(channel) {
+  if (state.starting) return;
+  if (state.sessionId && state.streamId === channel.stream_id) return;
+
+  const serial = ++state.playSerial;
+  const previousSession = state.sessionId;
+  state.starting = true;
+  state.pendingStreamId = channel.stream_id;
+  state.sessionId = null;
+  state.streamId = null;
+
   nowPlaying.textContent = channel.name;
   streamStatus.textContent = "Starting FFmpeg session…";
-  sessionInfo.textContent = "Waiting for HLS playlist…";
+  sessionInfo.textContent = "Opening provider stream…";
   stopBtn.disabled = true;
+  renderChannels();
 
   destroyHls();
+  video.pause();
   video.removeAttribute("src");
   video.load();
 
   try {
+    // Explicitly release the old provider connection before starting a new one.
+    if (previousSession) {
+      try {
+        await api(`/api/session/${previousSession}`, { method: "DELETE" });
+      } catch (_) {}
+    }
+
     const result = await api(`/api/play/${channel.stream_id}`, {
       method: "POST",
       body: JSON.stringify({ mode: playbackMode.value }),
     });
+
+    // A stale response should never steal playback from a newer request.
+    if (serial !== state.playSerial) {
+      try {
+        await api(`/api/session/${result.session_id}`, { method: "DELETE" });
+      } catch (_) {}
+      return;
+    }
+
     state.sessionId = result.session_id;
     state.streamId = channel.stream_id;
-    renderChannels();
 
     const codecs = result.source_codecs || {};
     const codecText = [codecs.video, codecs.audio].filter(Boolean).join(" / ");
@@ -218,12 +251,19 @@ async function playChannel(channel) {
     stopBtn.disabled = false;
     attachPlayer(result.playlist);
   } catch (error) {
-    state.sessionId = null;
-    state.streamId = null;
-    renderChannels();
-    streamStatus.textContent = "Playback failed";
-    sessionInfo.textContent = error.message;
-    toast(error.message);
+    if (serial === state.playSerial) {
+      state.sessionId = null;
+      state.streamId = null;
+      streamStatus.textContent = "Playback failed";
+      sessionInfo.textContent = error.message;
+      toast(error.message);
+    }
+  } finally {
+    if (serial === state.playSerial) {
+      state.starting = false;
+      state.pendingStreamId = null;
+      renderChannels();
+    }
   }
 }
 
@@ -265,6 +305,9 @@ function destroyHls() {
 }
 
 async function stopPlayback() {
+  state.playSerial += 1;
+  state.starting = false;
+  state.pendingStreamId = null;
   const sessionId = state.sessionId;
   state.sessionId = null;
   state.streamId = null;

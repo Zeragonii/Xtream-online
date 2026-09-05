@@ -26,6 +26,15 @@ A lightweight, LAN-first Xtream Codes web player. The provider credentials and u
 
 EPG, favourites, logos, VOD and series are intentionally deferred to later releases.
 
+### v0.1.2 playback-start improvements
+
+- Provider `get.php` is no longer downloaded/scanned on normal channel changes.
+- Successful stream URL layout is learned and reused first for later channels.
+- Player API/server metadata is cached for 10 minutes by default.
+- Auto mode reads codecs directly from FFmpeg stderr instead of waiting for an HLS segment.
+- Duplicate channel-start requests are serialized and reuse an existing matching session.
+- The web UI locks channel buttons while startup is in progress.
+
 ## Architecture
 
 ```text
@@ -49,7 +58,7 @@ The browser never receives the upstream `/live/<username>/<password>/<stream-id>
 
 ## Playback modes
 
-**Auto** opens the upstream only once in remux mode, then probes the first **local HLS segment**. H.264 + AAC stays on `-c copy`; other detected video/audio combinations are restarted as H.264 + AAC transcoding. This avoids the old upstream `ffprobe` connection that could temporarily consume the only slot on one-connection IPTV accounts.
+**Auto** opens the upstream in remux mode and reads the source codec declaration directly from FFmpeg's input metadata. H.264 + AAC stays on `-c copy`; incompatible video/audio combinations are immediately restarted as H.264 + AAC transcoding. Codec detection no longer waits for a complete HLS segment and never opens a separate upstream probe connection.
 
 **Remux only** forces stream copy. This is the lowest CPU option and is ideal for H.264/AAC sources.
 
@@ -77,7 +86,7 @@ Open:
 http://<docker-host-ip>:8080
 ```
 
-Enter the provider server URL, username and password on the setup page. The credentials are stored in `/data/xtream-online.db` inside the persistent volume.
+Enter the provider server URL, username and password on the setup page. The credentials are stored in `/data/xtream-web.db` inside the persistent volume. The legacy filename is intentionally retained so existing v0.1 deployments upgrade without losing configuration.
 
 ### Portainer
 
@@ -89,14 +98,16 @@ The included `docker-compose.yml` can be pasted directly into a Portainer Stack 
 | --- | --- | --- |
 | `MAX_ACTIVE_STREAMS` | `1` | Maximum simultaneous FFmpeg/upstream sessions |
 | `SESSION_IDLE_TIMEOUT` | `35` | Seconds without HLS requests before a session is killed |
-| `SESSION_START_TIMEOUT` | `15` | Seconds allowed for FFmpeg to produce its first HLS playlist |
-| `XTREAM_TIMEOUT` | `15` | Provider/API and FFmpeg HTTP timeout |
-| `FFPROBE_TIMEOUT` | `8` | Local HLS codec probe timeout |
+| `SESSION_START_TIMEOUT` | `12` | Seconds allowed for FFmpeg to produce its first HLS playlist |
+| `XTREAM_TIMEOUT` | `12` | Provider/API and FFmpeg HTTP timeout |
+| `CODEC_PROBE_TIMEOUT` | `4` | Maximum seconds to wait for FFmpeg input codec metadata |
 | `FFMPEG_MODE` | `auto` | UI/default mode: `auto`, `copy`, or `transcode` |
 | `FFMPEG_VIDEO_ENCODER` | `libx264` | Video encoder used in transcode mode |
 | `FFMPEG_VIDEO_PRESET` | `veryfast` | FFmpeg video preset |
 | `FFMPEG_AUDIO_ENCODER` | `aac` | Audio encoder used in transcode mode |
-| `PROVIDER_RELEASE_DELAY` | `2.0` | Seconds to wait before reconnecting when Auto switches from remux to transcode |
+| `PROVIDER_RELEASE_DELAY` | `0.5` | Seconds to wait before reconnecting when Auto switches from remux to transcode |
+| `PROVIDER_CACHE_TTL` | `600` | Seconds to cache Player API auth/server metadata for playback |
+| `M3U_TIMEOUT` | `6` | Timeout for last-resort `get.php` stream discovery |
 | `XTREAM_STREAM_BASE_URL` | unset | Optional manual streaming base override for unusual providers |
 | `HLS_TIME` | `2` | Target HLS segment length in seconds |
 | `HLS_LIST_SIZE` | `6` | Number of HLS segments retained in the live playlist |
@@ -134,7 +145,7 @@ With the default:
 MAX_ACTIVE_STREAMS=1
 ```
 
-starting a second channel stops the existing FFmpeg process before starting the new one. This is useful for providers/accounts limited to one concurrent stream.
+starting a second channel stops the existing FFmpeg process before starting the new one. Stream startup is single-flight: duplicate requests for the same channel wait for and reuse the same session rather than opening competing provider connections. This is useful for providers/accounts limited to one concurrent stream.
 
 The browser repeatedly requests the live HLS playlist while playing. Those requests update the session's last-access time. Once they stop for longer than `SESSION_IDLE_TIMEOUT`, the backend terminates FFmpeg and removes its temporary HLS files.
 
@@ -193,7 +204,7 @@ pytest -q
 uvicorn app.main:app --reload --port 8080
 ```
 
-A non-Docker local run also needs `ffmpeg`, `ffprobe`, and `app/static/vendor/hls.min.js`. Docker is the supported v0.1 development/runtime path because the image installs FFmpeg and vendors hls.js automatically.
+A non-Docker local run also needs `ffmpeg` and `app/static/vendor/hls.min.js`. Docker is the supported v0.1 development/runtime path because the image installs FFmpeg and vendors hls.js automatically.
 
 ## Provider API calls used in v0.1
 
@@ -206,7 +217,7 @@ Xtream Online currently uses the standard Player API operations:
 /player_api.php?...&action=get_live_streams&category_id=...
 ```
 
-For playback, Xtream Online also reads `server_info`, honours the provider's `allowed_output_formats`, optionally resolves the exact stream URL from `get.php`, and tries both common live URL layouts (`/live/<user>/<pass>/<id>` and `/<user>/<pass>/<id>`). If an HTTPS API endpoint is fronted separately from the live transport, an HTTP/80 fallback is included automatically. All of this resolution remains server-side.
+For playback, Xtream Online reads and caches `server_info`, honours the provider's `allowed_output_formats`, and tries both common live URL layouts (`/live/<user>/<pass>/<id>` and `/<user>/<pass>/<id>`). The first successful route is learned in memory and tried first on later channel changes. If normal Xtream routes all fail, `get.php` M3U resolution is used only as a last-resort fallback. If an HTTPS API endpoint is fronted separately from the live transport, an HTTP/80 fallback is included automatically. All resolution remains server-side.
 
 ## Security notes
 

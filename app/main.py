@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -99,7 +100,7 @@ async def configure_provider(payload: ProviderConfigRequest) -> dict:
     )
     client = XtreamClient(config)
     try:
-        auth = await client.authenticate()
+        auth = await client.authenticate(force=True)
     except XtreamError as exc:
         raise api_error(exc, 400) from exc
 
@@ -142,13 +143,25 @@ async def channels(category_id: str | None = Query(default=None)) -> list[dict]:
 async def play(stream_id: int, payload: PlayRequest) -> dict:
     client = configured_client()
     mode = payload.mode if payload.mode in {"auto", "copy", "transcode"} else settings.ffmpeg_mode
+    started = time.monotonic()
     try:
         candidates = await client.stream_candidates(stream_id)
-        session = await session_manager.start(stream_id, candidates, mode)
+        try:
+            session = await session_manager.start(stream_id, candidates, mode)
+        except SessionError as primary_exc:
+            # Expensive provider M3U discovery is deliberately last-resort only.
+            logger.info("Fast candidates failed for stream %s; trying provider M3U fallback", stream_id)
+            fallback = await client.playlist_candidates(stream_id)
+            if not fallback:
+                raise primary_exc
+            session = await session_manager.start(stream_id, fallback, mode)
+
+        client.remember_success(session.upstream_url)
     except (SessionError, OSError) as exc:
-        logger.warning("Could not start stream %s: %s", stream_id, exc)
+        logger.warning("Could not start stream %s after %.2fs: %s", stream_id, time.monotonic() - started, exc)
         raise api_error(exc) from exc
 
+    logger.info("Playback request for stream %s completed in %.2fs", stream_id, time.monotonic() - started)
     return {
         "session_id": session.id,
         "stream_id": stream_id,

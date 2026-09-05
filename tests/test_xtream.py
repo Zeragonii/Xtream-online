@@ -103,3 +103,132 @@ def test_stream_candidates_use_server_info_and_common_paths(monkeypatch):
     assert "http://provider.example/demo/secret/123.ts" in candidates
     assert "https://provider.example/live/demo/secret/123.ts" in candidates
     assert "http://provider.example:80/live/demo/secret/123.ts" in candidates
+
+
+def test_ffmpeg_stderr_codec_parser():
+    from app.sessions import parse_ffmpeg_codec_line
+
+    codecs = {"video": None, "audio": None}
+    assert not parse_ffmpeg_codec_line("Stream #0:0: Video: h264 (High), yuv420p, 1920x1080", codecs)
+    assert not parse_ffmpeg_codec_line("Stream #0:1: Audio: eac3, 48000 Hz, stereo", codecs)
+    assert parse_ffmpeg_codec_line("Stream mapping:", codecs)
+    assert codecs == {"video": "h264", "audio": "eac3"}
+
+
+def test_stream_candidates_do_not_fetch_m3u_on_hot_path(monkeypatch):
+    from app.xtream import _AUTH_CACHE, _ROUTE_CACHE
+
+    _AUTH_CACHE.clear()
+    _ROUTE_CACHE.clear()
+    client = XtreamClient(
+        ProviderConfig(
+            base_url="https://provider.example",
+            username="demo",
+            password="secret",
+            output="ts",
+        )
+    )
+
+    async def fake_authenticate(*, force=False):
+        return {
+            "user_info": {"auth": 1, "status": "Active", "allowed_output_formats": ["ts"]},
+            "server_info": {
+                "url": "provider.example",
+                "port": "80",
+                "server_protocol": "http",
+            },
+        }
+
+    async def forbidden_playlist(*args, **kwargs):
+        raise AssertionError("get.php must not be used on the normal candidate path")
+
+    monkeypatch.setattr(client, "authenticate", fake_authenticate)
+    monkeypatch.setattr(client, "_playlist_candidate", forbidden_playlist)
+    candidates = asyncio.run(client.stream_candidates(777))
+    assert candidates
+    assert candidates[0].endswith("/live/demo/secret/777.ts")
+
+
+def test_successful_route_is_learned_and_reused_first(monkeypatch):
+    from app.xtream import _AUTH_CACHE, _ROUTE_CACHE
+
+    _AUTH_CACHE.clear()
+    _ROUTE_CACHE.clear()
+    config = ProviderConfig(
+        base_url="https://provider.example",
+        username="demo",
+        password="secret",
+        output="ts",
+    )
+
+    async def fake_authenticate(*, force=False):
+        return {
+            "user_info": {"auth": 1, "status": "Active", "allowed_output_formats": ["ts"]},
+            "server_info": {
+                "url": "provider.example",
+                "port": "80",
+                "server_protocol": "http",
+            },
+        }
+
+    first = XtreamClient(config)
+    monkeypatch.setattr(first, "authenticate", fake_authenticate)
+    candidates = asyncio.run(first.stream_candidates(100))
+    root_candidate = next(url for url in candidates if url == "http://provider.example/demo/secret/100.ts")
+    first.remember_success(root_candidate)
+
+    second = XtreamClient(config)
+    monkeypatch.setattr(second, "authenticate", fake_authenticate)
+    next_candidates = asyncio.run(second.stream_candidates(101))
+    assert next_candidates[0] == "http://provider.example/demo/secret/101.ts"
+
+
+def test_duplicate_concurrent_start_spawns_one_process(monkeypatch):
+    from app.sessions import ProcessAttempt
+
+    class FakeProcess:
+        def __init__(self):
+            self.returncode = None
+
+        def terminate(self):
+            self.returncode = 0
+
+        def kill(self):
+            self.returncode = -9
+
+        async def wait(self):
+            return self.returncode
+
+    async def run_test():
+        manager = StreamSessionManager()
+        spawn_count = 0
+
+        async def fake_spawn(*args, **kwargs):
+            nonlocal spawn_count
+            spawn_count += 1
+            process = FakeProcess()
+            task = asyncio.create_task(asyncio.sleep(3600))
+            return ProcessAttempt(
+                process=process,
+                stderr_lines=__import__("collections").deque(),
+                stderr_task=task,
+                source_codecs={"video": None, "audio": None},
+                probe_complete=asyncio.Event(),
+            )
+
+        async def fake_wait_for_playlist(attempt, directory):
+            await asyncio.sleep(0.05)
+            return True
+
+        monkeypatch.setattr(manager, "_spawn", fake_spawn)
+        monkeypatch.setattr(manager, "_wait_for_playlist", fake_wait_for_playlist)
+
+        first, second = await asyncio.gather(
+            manager.start(123, ["http://provider/live/u/p/123.ts"], "copy"),
+            manager.start(123, ["http://provider/live/u/p/123.ts"], "copy"),
+        )
+        assert first.id == second.id
+        assert spawn_count == 1
+        await manager.stop_all()
+
+    asyncio.run(run_test())
