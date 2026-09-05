@@ -13,6 +13,7 @@ services:
       SESSION_IDLE_TIMEOUT: "35"
       FFMPEG_MODE: auto
       PROVIDER_RELEASE_DELAY: "0.5"
+      CATALOG_REFRESH_INTERVAL: "900"
       # Optional override if a provider advertises an unusual stream host/port.
       # XTREAM_STREAM_BASE_URL: http://provider.example:80
       # Optional: configure the provider without using the setup page.

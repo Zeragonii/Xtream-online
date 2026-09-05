@@ -2,6 +2,17 @@
 
 Release Please maintains this file from Conventional Commit messages.
 
+## Unreleased (v0.1.5)
+
+- Give the Channels pane its own fixed-height scrollbar, matching the independently scrollable Categories pane.
+- Add a persistent SQLite catalogue cache for live categories and channels.
+- Refresh the Xtream catalogue in the background instead of querying the provider from page navigation requests.
+- Refresh the catalogue automatically every 15 minutes by default and expose a non-blocking manual refresh action.
+- Serve channel searches and category filters entirely from the local cache.
+- Page channel results 150 rows at a time and progressively load more as the user scrolls, avoiding huge synchronous DOM renders.
+- Parse large Xtream JSON payloads off the FastAPI event loop so catalogue refreshes do not stall unrelated requests.
+- Preserve the last successful catalogue across container restarts and transient provider refresh failures.
+
 ## Unreleased (v0.1.4)
 
 - Prefer hls.js/MSE over Chromium's misleading native HLS capability report.

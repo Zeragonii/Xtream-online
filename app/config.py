@@ -35,6 +35,7 @@ class Settings:
     ffmpeg_audio_encoder: str = os.getenv("FFMPEG_AUDIO_ENCODER", "aac")
     provider_release_delay: float = max(0.0, _env_float("PROVIDER_RELEASE_DELAY", 0.5))
     provider_cache_ttl: float = max(10.0, _env_float("PROVIDER_CACHE_TTL", 600.0))
+    catalog_refresh_interval: float = max(60.0, _env_float("CATALOG_REFRESH_INTERVAL", 900.0))
     hls_time: int = max(1, _env_int("HLS_TIME", 2))
     hls_list_size: int = max(3, _env_int("HLS_LIST_SIZE", 12))
     m3u_max_bytes: int = max(1_000_000, _env_int("M3U_MAX_BYTES", 25_000_000))

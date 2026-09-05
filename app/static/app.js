@@ -1,7 +1,13 @@
+const CHANNEL_PAGE_SIZE = 150;
+
 const state = {
   categories: [],
   channels: [],
-  filteredChannels: [],
+  channelTotal: 0,
+  channelOffset: 0,
+  channelLoading: false,
+  channelDone: false,
+  channelLoadSerial: 0,
   categoryId: null,
   sessionId: null,
   streamId: null,
@@ -15,6 +21,8 @@ const state = {
   autoFallbackAttempted: false,
   hlsNetworkRecoveries: 0,
   baseStreamStatus: "",
+  catalogPollTimer: null,
+  searchTimer: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -25,6 +33,7 @@ const setupMessage = $("setupMessage");
 const categoriesEl = $("categories");
 const channelList = $("channelList");
 const channelCount = $("channelCount");
+const catalogStatus = $("catalogStatus");
 const search = $("search");
 const video = $("video");
 const nowPlaying = $("nowPlaying");
@@ -33,6 +42,7 @@ const sessionInfo = $("sessionInfo");
 const stopBtn = $("stopBtn");
 const playbackMode = $("playbackMode");
 const settingsBtn = $("settingsBtn");
+const refreshBtn = $("refreshBtn");
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -118,6 +128,63 @@ function setConfigured(configured) {
   settingsBtn.classList.toggle("hidden", !configured);
 }
 
+function updateCatalogStatus(status) {
+  if (!status) return;
+  if (status.refreshing) {
+    catalogStatus.textContent = "Syncing provider in background…";
+    refreshBtn.classList.add("spinning");
+  } else if (status.ready) {
+    const age = status.age_seconds == null ? "" : ` • ${Math.round(status.age_seconds)}s old`;
+    catalogStatus.textContent = `${status.channel_count.toLocaleString()} cached channels${age}`;
+    refreshBtn.classList.remove("spinning");
+  } else if (status.last_error) {
+    catalogStatus.textContent = `Sync failed: ${status.last_error}`;
+    refreshBtn.classList.remove("spinning");
+  } else {
+    catalogStatus.textContent = "Waiting for provider catalogue…";
+    refreshBtn.classList.remove("spinning");
+  }
+}
+
+async function getCatalogStatus() {
+  const status = await api("/api/catalog/status");
+  updateCatalogStatus(status);
+  return status;
+}
+
+function scheduleCatalogPoll(delay = 750) {
+  clearTimeout(state.catalogPollTimer);
+  state.catalogPollTimer = setTimeout(pollCatalog, delay);
+}
+
+async function pollCatalog() {
+  try {
+    const status = await getCatalogStatus();
+    if (!status.ready && !status.refreshing) {
+      await api("/api/catalog/refresh", { method: "POST" });
+      scheduleCatalogPoll(status.last_error ? 3000 : 750);
+      return;
+    }
+    if (status.refreshing) {
+      scheduleCatalogPoll(750);
+      return;
+    }
+    await Promise.all([loadCategories(), loadChannels(state.categoryId, { reset: true })]);
+  } catch (error) {
+    catalogStatus.textContent = `Catalogue status unavailable: ${error.message}`;
+    scheduleCatalogPoll(3000);
+  }
+}
+
+async function ensureCatalog() {
+  const status = await getCatalogStatus();
+  if (!status.ready && !status.refreshing) {
+    await api("/api/catalog/refresh", { method: "POST" });
+    updateCatalogStatus({ ...status, refreshing: true });
+  }
+  if (status.refreshing || !status.ready) scheduleCatalogPoll();
+}
+
 async function bootstrap() {
   try {
     const status = await api("/api/status");
@@ -128,8 +195,9 @@ async function bootstrap() {
       playbackMode.value = ["auto", "copy", "transcode"].includes(status.default_ffmpeg_mode)
         ? status.default_ffmpeg_mode
         : "auto";
-      await loadCategories();
-      await loadChannels(null);
+      // These endpoints read only the local SQLite cache and never contact the provider.
+      await Promise.all([loadCategories(), loadChannels(null, { reset: true })]);
+      ensureCatalog().catch((error) => toast(`Catalogue sync failed: ${error.message}`));
     } else {
       setConfigured(false);
     }
@@ -154,11 +222,14 @@ setupForm.addEventListener("submit", async (event) => {
       }),
     });
     $("password").value = "";
-    setupMessage.textContent = "Connected.";
+    setupMessage.textContent = "Connected. Catalogue syncing in background…";
     setConfigured(true);
-    await loadCategories();
-    await loadChannels(null);
-    toast("Provider connected", "success");
+    state.categories = [];
+    state.channels = [];
+    renderCategories();
+    renderChannels();
+    await ensureCatalog();
+    toast("Provider connected — catalogue sync started", "success");
   } catch (error) {
     setupMessage.textContent = error.message;
   } finally {
@@ -182,18 +253,25 @@ settingsBtn.addEventListener("click", async () => {
 });
 
 async function loadCategories() {
-  categoriesEl.innerHTML = '<div class="muted">Loading…</div>';
-  state.categories = await api("/api/categories");
+  const items = await api("/api/categories");
+  state.categories = items;
   renderCategories();
 }
 
 function renderCategories() {
   categoriesEl.innerHTML = "";
-  const all = categoryButton(null, "All channels");
-  categoriesEl.appendChild(all);
+  const fragment = document.createDocumentFragment();
+  fragment.appendChild(categoryButton(null, "All channels"));
   for (const category of state.categories) {
-    categoriesEl.appendChild(categoryButton(category.category_id, category.category_name));
+    fragment.appendChild(categoryButton(category.category_id, category.category_name));
   }
+  if (!state.categories.length) {
+    const note = document.createElement("div");
+    note.className = "muted list-note";
+    note.textContent = "Catalogue is syncing in the background…";
+    fragment.appendChild(note);
+  }
+  categoriesEl.appendChild(fragment);
 }
 
 function categoryButton(id, name) {
@@ -201,38 +279,66 @@ function categoryButton(id, name) {
   button.type = "button";
   button.className = `category-button ${state.categoryId === id ? "active" : ""}`;
   button.textContent = name;
-  button.addEventListener("click", async () => {
+  button.addEventListener("click", () => {
     state.categoryId = id;
     renderCategories();
-    try {
-      await loadChannels(id);
-    } catch (error) {
-      toast(error.message);
-    }
+    loadChannels(id, { reset: true }).catch((error) => toast(error.message));
   });
   return button;
 }
 
-async function loadChannels(categoryId) {
-  channelList.innerHTML = '<div class="muted" style="padding:12px">Loading channels…</div>';
-  const query = categoryId ? `?category_id=${encodeURIComponent(categoryId)}` : "";
-  state.channels = await api(`/api/channels${query}`);
-  filterChannels();
+function channelQueryUrl(categoryId, offset) {
+  const params = new URLSearchParams({
+    offset: String(offset),
+    limit: String(CHANNEL_PAGE_SIZE),
+  });
+  if (categoryId) params.set("category_id", categoryId);
+  const needle = search.value.trim();
+  if (needle) params.set("q", needle);
+  return `/api/channels?${params.toString()}`;
 }
 
-function filterChannels() {
-  const needle = search.value.trim().toLowerCase();
-  state.filteredChannels = needle
-    ? state.channels.filter((channel) => channel.name.toLowerCase().includes(needle))
-    : state.channels;
-  renderChannels();
+async function loadChannels(categoryId, { reset = false } = {}) {
+  if (state.channelLoading && !reset) return;
+
+  if (reset) {
+    state.channelLoadSerial += 1;
+    state.channels = [];
+    state.channelTotal = 0;
+    state.channelOffset = 0;
+    state.channelDone = false;
+    channelList.scrollTop = 0;
+    renderChannels();
+  }
+  if (state.channelDone) return;
+
+  const serial = state.channelLoadSerial;
+  const offset = state.channelOffset;
+  state.channelLoading = true;
+  renderChannelFooter();
+  try {
+    const result = await api(channelQueryUrl(categoryId, offset));
+    if (serial !== state.channelLoadSerial) return;
+    state.channels.push(...result.items);
+    state.channelTotal = result.total;
+    state.channelOffset = state.channels.length;
+    state.channelDone = state.channelOffset >= state.channelTotal;
+    renderChannels();
+    if (!result.ready && !result.refreshing) ensureCatalog().catch(() => {});
+  } finally {
+    if (serial === state.channelLoadSerial) {
+      state.channelLoading = false;
+      renderChannelFooter();
+    }
+  }
 }
 
 function renderChannels() {
   channelList.innerHTML = "";
-  channelCount.textContent = `${state.filteredChannels.length} channel${state.filteredChannels.length === 1 ? "" : "s"}`;
+  channelCount.textContent = `${state.channelTotal.toLocaleString()} channel${state.channelTotal === 1 ? "" : "s"}`;
+
   const fragment = document.createDocumentFragment();
-  for (const channel of state.filteredChannels) {
+  for (const channel of state.channels) {
     const button = document.createElement("button");
     button.type = "button";
     const isCurrent = state.streamId === channel.stream_id;
@@ -244,16 +350,47 @@ function renderChannels() {
     fragment.appendChild(button);
   }
   channelList.appendChild(fragment);
+  renderChannelFooter();
 }
 
-search.addEventListener("input", filterChannels);
-$("refreshBtn").addEventListener("click", async () => {
+function renderChannelFooter() {
+  channelList.querySelector(".channel-load-state")?.remove();
+  if (!state.channels.length || state.channelLoading || !state.channelDone) {
+    const footer = document.createElement("div");
+    footer.className = "channel-load-state muted";
+    if (state.channelLoading) footer.textContent = "Loading cached channels…";
+    else if (!state.channels.length) footer.textContent = "No cached channels yet.";
+    else footer.textContent = `${state.channels.length.toLocaleString()} of ${state.channelTotal.toLocaleString()} loaded`;
+    channelList.appendChild(footer);
+  }
+}
+
+channelList.addEventListener("scroll", () => {
+  const remaining = channelList.scrollHeight - channelList.scrollTop - channelList.clientHeight;
+  if (remaining < 500 && !state.channelLoading && !state.channelDone) {
+    loadChannels(state.categoryId).catch((error) => toast(error.message));
+  }
+});
+
+search.addEventListener("input", () => {
+  clearTimeout(state.searchTimer);
+  state.searchTimer = setTimeout(() => {
+    loadChannels(state.categoryId, { reset: true }).catch((error) => toast(error.message));
+  }, 250);
+});
+
+refreshBtn.addEventListener("click", async () => {
+  if (refreshBtn.disabled) return;
+  refreshBtn.disabled = true;
   try {
-    await loadCategories();
-    await loadChannels(state.categoryId);
-    toast("Channel list refreshed", "success");
+    const result = await api("/api/catalog/refresh", { method: "POST" });
+    updateCatalogStatus({ ...result, refreshing: true });
+    toast(result.started ? "Provider catalogue refresh started" : "Catalogue refresh already running", "success");
+    scheduleCatalogPoll(400);
   } catch (error) {
     toast(error.message);
+  } finally {
+    refreshBtn.disabled = false;
   }
 });
 

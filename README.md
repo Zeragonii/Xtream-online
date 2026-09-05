@@ -26,6 +26,15 @@ A lightweight, LAN-first Xtream Codes web player. The provider credentials and u
 
 EPG, favourites, logos, VOD and series are intentionally deferred to later releases.
 
+### v0.1.5 catalogue/UI improvements
+
+- Categories and channels are cached persistently in SQLite.
+- Provider catalogue refreshes run in the background; page navigation never waits on Xtream API calls.
+- The cache refreshes every 15 minutes by default and can be refreshed manually from the UI.
+- Channel/category filtering and search are served from SQLite.
+- The channel list is paged 150 rows at a time and loads additional rows on scroll.
+- Categories and Channels each have their own independent scrollbar.
+
 ### v0.1.2 playback-start improvements
 
 - Provider `get.php` is no longer downloaded/scanned on normal channel changes.
@@ -40,18 +49,16 @@ EPG, favourites, logos, VOD and series are intentionally deferred to later relea
 ```text
 Browser
   │
-  ├── /api/categories
-  ├── /api/channels
-  └── /hls/<session>/index.m3u8
-          │
-          ▼
-     Xtream Online
-      ├─ FastAPI
-      ├─ SQLite config
-      └─ FFmpeg session manager
-              │
-              ▼
-       Xtream provider
+  ├── /api/categories ─┐
+  ├── /api/channels ───┼──► SQLite catalogue cache
+  └── /hls/<session>   │
+          │             │
+          ▼             │
+     Xtream Online      │
+      ├─ FastAPI        │
+      ├─ background catalogue refresher ───► Xtream Player API
+      ├─ SQLite config/cache
+      └─ FFmpeg session manager ────────────► Xtream live stream
 ```
 
 The browser never receives the upstream `/live/<username>/<password>/<stream-id>` URL.
@@ -107,10 +114,11 @@ The included `docker-compose.yml` can be pasted directly into a Portainer Stack 
 | `FFMPEG_AUDIO_ENCODER` | `aac` | Audio encoder used in transcode mode |
 | `PROVIDER_RELEASE_DELAY` | `0.5` | Seconds to wait before reconnecting when Auto switches from remux to transcode |
 | `PROVIDER_CACHE_TTL` | `600` | Seconds to cache Player API auth/server metadata for playback |
+| `CATALOG_REFRESH_INTERVAL` | `900` | Seconds between background category/channel catalogue refreshes |
 | `M3U_TIMEOUT` | `6` | Timeout for last-resort `get.php` stream discovery |
 | `XTREAM_STREAM_BASE_URL` | unset | Optional manual streaming base override for unusual providers |
 | `HLS_TIME` | `2` | Target HLS segment length in seconds |
-| `HLS_LIST_SIZE` | `6` | Number of HLS segments retained in the live playlist |
+| `HLS_LIST_SIZE` | `12` | Number of HLS segments retained in the live playlist |
 
 Provider credentials can also be supplied entirely through container environment variables:
 
@@ -206,6 +214,12 @@ uvicorn app.main:app --reload --port 8080
 
 A non-Docker local run also needs `ffmpeg` and `app/static/vendor/hls.min.js`. Docker is the supported v0.1 development/runtime path because the image installs FFmpeg and vendors hls.js automatically.
 
+## Provider catalogue cache
+
+The browser-facing category and channel APIs do **not** query the Xtream provider directly. A background service fetches `get_live_categories` and `get_live_streams`, then atomically replaces the persistent SQLite catalogue cache. The UI reads that cache immediately, including after container restarts. Manual refresh starts a background sync and leaves the current cached catalogue usable while it runs.
+
+The channel API is paged (`offset`, `limit`) and supports server-side cached search (`q`) plus `category_id`, so the browser never needs to create tens of thousands of channel buttons at once.
+
 ## Provider API calls used in v0.1
 
 Xtream Online currently uses the standard Player API operations:
@@ -214,7 +228,7 @@ Xtream Online currently uses the standard Player API operations:
 /player_api.php?username=...&password=...
 /player_api.php?...&action=get_live_categories
 /player_api.php?...&action=get_live_streams
-/player_api.php?...&action=get_live_streams&category_id=...
+/player_api.php?...&action=get_live_streams
 ```
 
 For playback, Xtream Online reads and caches `server_info`, honours the provider's `allowed_output_formats`, and tries both common live URL layouts (`/live/<user>/<pass>/<id>` and `/<user>/<pass>/<id>`). The first successful route is learned in memory and tried first on later channel changes. If normal Xtream routes all fail, `get.php` M3U resolution is used only as a last-resort fallback. If an HTTPS API endpoint is fronted separately from the live transport, an HTTP/80 fallback is included automatically. All resolution remains server-side.

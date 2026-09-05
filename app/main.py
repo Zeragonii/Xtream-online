@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -10,9 +11,10 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from .catalog import catalog_service
 from .config import settings
 from .sessions import SessionError, session_manager
-from .storage import ProviderConfig, store
+from .storage import ProviderConfig, catalog_store, provider_cache_key, store
 from .xtream import XtreamClient, XtreamError, normalize_base_url
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -26,7 +28,9 @@ STATIC_DIR = Path(__file__).parent / "static"
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await session_manager.start_background_tasks()
+    await catalog_service.start()
     yield
+    await catalog_service.shutdown()
     await session_manager.shutdown()
 
 
@@ -111,11 +115,14 @@ async def configure_provider(payload: ProviderConfigRequest) -> dict:
         raise api_error(exc, 400) from exc
 
     store.save(config)
+    catalog_store.clear()
+    await catalog_service.request_refresh(force=True)
     user_info = auth.get("user_info", {}) if isinstance(auth, dict) else {}
     return {
         "ok": True,
         "status": user_info.get("status"),
         "expires": user_info.get("exp_date"),
+        "catalog_refresh_started": True,
     }
 
 
@@ -126,23 +133,65 @@ async def clear_provider() -> dict:
     except RuntimeError as exc:
         raise api_error(exc, 409) from exc
     await session_manager.stop_all()
+    catalog_store.clear()
     return {"ok": True}
+
+
+@app.get("/api/catalog/status")
+async def catalog_status() -> dict:
+    return await catalog_service.status()
+
+
+@app.post("/api/catalog/refresh")
+async def refresh_catalog() -> dict:
+    configured_client()  # return 409 immediately if there is no provider
+    started = await catalog_service.request_refresh(force=True)
+    status = await catalog_service.status()
+    return {"ok": True, "started": started, **status}
 
 
 @app.get("/api/categories")
 async def categories() -> list[dict]:
-    try:
-        return await configured_client().live_categories()
-    except XtreamError as exc:
-        raise api_error(exc) from exc
+    config = store.get()
+    if not config:
+        raise HTTPException(status_code=409, detail="Xtream provider is not configured")
+    key = provider_cache_key(config)
+    items = await asyncio.to_thread(catalog_store.categories, key)
+    if not items:
+        await catalog_service.request_refresh(force=False)
+    return items
 
 
 @app.get("/api/channels")
-async def channels(category_id: str | None = Query(default=None)) -> list[dict]:
-    try:
-        return await configured_client().live_streams(category_id)
-    except XtreamError as exc:
-        raise api_error(exc) from exc
+async def channels(
+    category_id: str | None = Query(default=None),
+    q: str = Query(default="", max_length=200),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=200, ge=1, le=500),
+) -> dict:
+    config = store.get()
+    if not config:
+        raise HTTPException(status_code=409, detail="Xtream provider is not configured")
+    key = provider_cache_key(config)
+    items, total = await asyncio.to_thread(
+        catalog_store.channels,
+        key,
+        category_id=category_id,
+        search=q.strip(),
+        offset=offset,
+        limit=limit,
+    )
+    status = await catalog_service.status()
+    if not status["ready"]:
+        await catalog_service.request_refresh(force=False)
+    return {
+        "items": items,
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "ready": status["ready"],
+        "refreshing": status["refreshing"],
+    }
 
 
 @app.post("/api/play/{stream_id}")

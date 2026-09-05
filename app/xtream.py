@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -139,7 +141,7 @@ class XtreamClient:
         return httpx.AsyncClient(
             timeout=timeout or settings.xtream_timeout,
             follow_redirects=True,
-            headers={"User-Agent": "Xtream-Online/0.1.2"},
+            headers={"User-Agent": "Xtream-Online/0.1.5"},
         )
 
     async def _get(self, action: str | None = None, **extra: str | int) -> object:
@@ -155,7 +157,7 @@ class XtreamClient:
             async with self._client() as client:
                 response = await client.get(self.api_url, params=params)
                 response.raise_for_status()
-                return response.json()
+                return await asyncio.to_thread(json.loads, response.content)
         except httpx.HTTPStatusError as exc:
             raise XtreamError(f"Xtream request returned HTTP {exc.response.status_code}") from exc
         except httpx.RequestError as exc:

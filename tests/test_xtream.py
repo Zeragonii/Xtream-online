@@ -279,3 +279,69 @@ def test_frontend_prefers_hlsjs_before_native_hls():
     fn = js[js.index("function attachPlayer"):js.index("function destroyHls")]
     assert fn.index("Hls.isSupported()") < fn.index('video.canPlayType("application/vnd.apple.mpegurl")')
     assert 'reportClientEvent("player-path", "hls.js/MSE", "info")' in fn
+
+
+def test_catalog_cache_paginates_and_filters_without_network():
+    from app.storage import catalog_store, provider_cache_key
+
+    config = ProviderConfig(base_url="http://provider.example", username="demo", password="secret", output="ts")
+    key = provider_cache_key(config)
+    catalog_store.clear()
+    catalog_store.replace(
+        key,
+        [{"category_id": "10", "category_name": "News", "parent_id": 0}],
+        [
+            {"stream_id": 1, "name": "Alpha News", "category_id": "10", "tv_archive": False},
+            {"stream_id": 2, "name": "Beta News", "category_id": "10", "tv_archive": False},
+            {"stream_id": 3, "name": "Gamma Sport", "category_id": "20", "tv_archive": False},
+        ],
+    )
+
+    first, total = catalog_store.channels(key, category_id="10", search="", offset=0, limit=1)
+    second, total2 = catalog_store.channels(key, category_id="10", search="", offset=1, limit=1)
+    searched, searched_total = catalog_store.channels(key, category_id=None, search="gamma", offset=0, limit=10)
+
+    assert total == total2 == 2
+    assert [row["stream_id"] for row in first] == [1]
+    assert [row["stream_id"] for row in second] == [2]
+    assert searched_total == 1
+    assert searched[0]["name"] == "Gamma Sport"
+
+
+def test_catalog_categories_endpoint_reads_local_cache(monkeypatch):
+    from app.main import categories
+    from app.storage import catalog_store, provider_cache_key, store
+
+    config = ProviderConfig(base_url="http://provider.example", username="cache-user", password="cache-pass", output="ts")
+    store.save(config)
+    key = provider_cache_key(config)
+    catalog_store.clear()
+    catalog_store.replace(
+        key,
+        [{"category_id": "7", "category_name": "Cached", "parent_id": 0}],
+        [],
+    )
+
+    async def forbidden(*args, **kwargs):
+        raise AssertionError("provider must not be queried by /api/categories")
+
+    monkeypatch.setattr(XtreamClient, "live_categories", forbidden)
+    try:
+        result = asyncio.run(categories())
+        assert result == [{"category_id": "7", "category_name": "Cached", "parent_id": "0"}]
+    finally:
+        store.clear()
+        catalog_store.clear()
+
+
+def test_frontend_pages_channels_and_has_independent_scrollbar():
+    from pathlib import Path
+
+    root = Path(__file__).parents[1]
+    js = (root / "app" / "static" / "app.js").read_text()
+    css = (root / "app" / "static" / "styles.css").read_text()
+    assert "const CHANNEL_PAGE_SIZE = 150" in js
+    assert 'channelList.addEventListener("scroll"' in js
+    assert "/api/catalog/refresh" in js
+    channel_rule = css[css.index(".channel-list {"):css.index("}", css.index(".channel-list {"))]
+    assert "overflow-y: auto" in channel_rule
