@@ -219,6 +219,28 @@ Xtream Online currently uses the standard Player API operations:
 
 For playback, Xtream Online reads and caches `server_info`, honours the provider's `allowed_output_formats`, and tries both common live URL layouts (`/live/<user>/<pass>/<id>` and `/<user>/<pass>/<id>`). The first successful route is learned in memory and tried first on later channel changes. If normal Xtream routes all fail, `get.php` M3U resolution is used only as a last-resort fallback. If an HTTPS API endpoint is fronted separately from the live transport, an HTTP/80 fallback is included automatically. All resolution remains server-side.
 
+## Browser playback diagnostics
+
+v0.1.3 reports browser-side playback state back to the application logs. This closes a gap where FFmpeg could be healthy and HLS segments could be served successfully while a browser autoplay, MSE or decoder failure remained invisible.
+
+Useful Docker log events include:
+
+```text
+Browser event session=abcd1234 stream=11930 event=video-play-rejected detail=NotAllowedError: ...
+Browser event session=abcd1234 stream=11930 event=hls-fatal detail=type=mediaError details=bufferAppendError ...
+Browser event session=abcd1234 stream=11930 event=video-playing detail=readyState=4
+```
+
+A live session can also be inspected locally with:
+
+```text
+GET /api/session/<session-id>/diagnostics
+```
+
+The diagnostics response contains process state, source codecs, playlist/segment health and the tail of redacted FFmpeg stderr. It never returns the upstream provider URL or credentials.
+
+If Auto mode successfully remuxes a source but hls.js reports a fatal browser media/decode error, the UI makes one automatic browser-safe retry in forced H.264/AAC transcode mode. Autoplay-policy failures are not transcoding failures: when `video.play()` is blocked, the UI tells the user to press the native Play control.
+
 ## Security notes
 
 - Provider credentials never appear in the browser's playback URL.

@@ -10,6 +10,11 @@ const state = {
   starting: false,
   pendingStreamId: null,
   playSerial: 0,
+  currentChannel: null,
+  lastPlayResult: null,
+  autoFallbackAttempted: false,
+  hlsNetworkRecoveries: 0,
+  baseStreamStatus: "",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -44,6 +49,60 @@ async function api(path, options = {}) {
   }
   if (response.status === 204) return null;
   return response.json();
+}
+
+async function reportClientEvent(event, detail = "", level = "warning") {
+  if (!state.sessionId) return;
+  try {
+    await fetch(`/api/session/${state.sessionId}/client-event`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ event, detail: String(detail || "").slice(0, 2000), level }),
+      keepalive: true,
+    });
+  } catch (_) {}
+}
+
+function mediaErrorText() {
+  const error = video.error;
+  if (!error) return "unknown media element error";
+  const labels = {
+    1: "MEDIA_ERR_ABORTED",
+    2: "MEDIA_ERR_NETWORK",
+    3: "MEDIA_ERR_DECODE",
+    4: "MEDIA_ERR_SRC_NOT_SUPPORTED",
+  };
+  return `${labels[error.code] || `MEDIA_ERR_${error.code}`}${error.message ? `: ${error.message}` : ""}`;
+}
+
+async function attemptVideoPlay() {
+  try {
+    await video.play();
+    return true;
+  } catch (error) {
+    const detail = `${error?.name || "PlayError"}: ${error?.message || error}`;
+    await reportClientEvent("video-play-rejected", detail);
+    if (error?.name === "NotAllowedError") {
+      streamStatus.textContent = `${state.baseStreamStatus} • ready — press ▶ Play`;
+      toast("The browser blocked automatic playback. Press Play in the video controls.", "success");
+    } else {
+      streamStatus.textContent = `${state.baseStreamStatus} • browser play error`;
+      toast(`Browser could not start video: ${detail}`);
+    }
+    return false;
+  }
+}
+
+async function forceBrowserSafeTranscode(reason) {
+  const channel = state.currentChannel;
+  if (!channel || state.starting || state.autoFallbackAttempted) return;
+  if (!state.lastPlayResult || state.lastPlayResult.mode !== "copy") return;
+  if (playbackMode.value !== "auto") return;
+
+  state.autoFallbackAttempted = true;
+  await reportClientEvent("auto-transcode-fallback", reason, "warning");
+  toast("Browser rejected the remuxed stream; retrying in browser-safe transcode mode.", "success");
+  await playChannel(channel, { modeOverride: "transcode", forceRestart: true, isFallback: true });
 }
 
 function toast(message, type = "error") {
@@ -198,9 +257,14 @@ $("refreshBtn").addEventListener("click", async () => {
   }
 });
 
-async function playChannel(channel) {
+async function playChannel(channel, options = {}) {
   if (state.starting) return;
-  if (state.sessionId && state.streamId === channel.stream_id) return;
+  if (state.sessionId && state.streamId === channel.stream_id && !options.forceRestart) return;
+
+  if (!options.isFallback) state.autoFallbackAttempted = false;
+  state.currentChannel = channel;
+  state.lastPlayResult = null;
+  state.hlsNetworkRecoveries = 0;
 
   const serial = ++state.playSerial;
   const previousSession = state.sessionId;
@@ -210,7 +274,7 @@ async function playChannel(channel) {
   state.streamId = null;
 
   nowPlaying.textContent = channel.name;
-  streamStatus.textContent = "Starting FFmpeg session…";
+  streamStatus.textContent = options.isFallback ? "Retrying with browser-safe transcode…" : "Starting FFmpeg session…";
   sessionInfo.textContent = "Opening provider stream…";
   stopBtn.disabled = true;
   renderChannels();
@@ -230,7 +294,7 @@ async function playChannel(channel) {
 
     const result = await api(`/api/play/${channel.stream_id}`, {
       method: "POST",
-      body: JSON.stringify({ mode: playbackMode.value }),
+      body: JSON.stringify({ mode: options.modeOverride || playbackMode.value }),
     });
 
     // A stale response should never steal playback from a newer request.
@@ -243,17 +307,20 @@ async function playChannel(channel) {
 
     state.sessionId = result.session_id;
     state.streamId = channel.stream_id;
+    state.lastPlayResult = result;
 
     const codecs = result.source_codecs || {};
     const codecText = [codecs.video, codecs.audio].filter(Boolean).join(" / ");
-    streamStatus.textContent = `${result.mode === "copy" ? "Remuxing" : "Transcoding"}${codecText ? ` • source ${codecText}` : ""}`;
+    state.baseStreamStatus = `${result.mode === "copy" ? "Remuxing" : "Transcoding"}${codecText ? ` • source ${codecText}` : ""}`;
+    streamStatus.textContent = `${state.baseStreamStatus} • loading player…`;
     sessionInfo.textContent = `Session ${result.session_id.slice(0, 8)} • stream ${channel.stream_id}`;
     stopBtn.disabled = false;
-    attachPlayer(result.playlist);
+    attachPlayer(result.playlist, channel, result);
   } catch (error) {
     if (serial === state.playSerial) {
       state.sessionId = null;
       state.streamId = null;
+      state.lastPlayResult = null;
       streamStatus.textContent = "Playback failed";
       sessionInfo.textContent = error.message;
       toast(error.message);
@@ -267,10 +334,20 @@ async function playChannel(channel) {
   }
 }
 
-function attachPlayer(url) {
+function hlsErrorDetail(data) {
+  return [
+    `type=${data.type || "unknown"}`,
+    `details=${data.details || "unknown"}`,
+    data.reason ? `reason=${data.reason}` : "",
+    data.error?.message ? `error=${data.error.message}` : "",
+    data.response?.code ? `http=${data.response.code}` : "",
+  ].filter(Boolean).join(" ");
+}
+
+function attachPlayer(url, channel, result) {
   if (video.canPlayType("application/vnd.apple.mpegurl")) {
     video.src = url;
-    video.play().catch(() => {});
+    video.addEventListener("loadedmetadata", () => attemptVideoPlay(), { once: true });
     return;
   }
 
@@ -281,20 +358,49 @@ function attachPlayer(url) {
       backBufferLength: 30,
       liveSyncDurationCount: 3,
     });
-    state.hls.loadSource(url);
-    state.hls.attachMedia(video);
-    state.hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
-    state.hls.on(Hls.Events.ERROR, (_, data) => {
+
+    state.hls.on(Hls.Events.MEDIA_ATTACHED, () => {
+      reportClientEvent("hls-media-attached", "MediaSource attached", "info");
+      state.hls?.loadSource(url);
+    });
+    state.hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
+      const levels = data?.levels?.length ?? 0;
+      reportClientEvent("hls-manifest-parsed", `levels=${levels}`, "info");
+      streamStatus.textContent = `${state.baseStreamStatus} • buffered`;
+      attemptVideoPlay();
+    });
+    state.hls.on(Hls.Events.ERROR, async (_, data) => {
+      const detail = hlsErrorDetail(data);
       if (data.fatal) {
-        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) state.hls.startLoad();
-        else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) state.hls.recoverMediaError();
-        else toast(`Fatal HLS error: ${data.details}`);
+        await reportClientEvent("hls-fatal", detail);
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR && state.hlsNetworkRecoveries < 2) {
+          state.hlsNetworkRecoveries += 1;
+          streamStatus.textContent = `${state.baseStreamStatus} • recovering network (${state.hlsNetworkRecoveries}/2)…`;
+          state.hls?.startLoad();
+        } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+          streamStatus.textContent = `${state.baseStreamStatus} • browser media error`;
+          await forceBrowserSafeTranscode(detail);
+          if (!state.autoFallbackAttempted) {
+            state.hls?.recoverMediaError();
+          }
+        } else {
+          streamStatus.textContent = `${state.baseStreamStatus} • fatal HLS error`;
+          toast(`Fatal HLS error: ${data.details}`);
+        }
+      } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+        reportClientEvent("hls-media-warning", detail, "info");
       }
     });
+
+    // Load the playlist after MediaSource attachment so player startup follows
+    // the canonical hls.js lifecycle and gives us deterministic diagnostics.
+    state.hls.attachMedia(video);
     return;
   }
 
+  streamStatus.textContent = "Browser has no HLS/MSE support";
   toast("This browser does not support HLS playback.");
+  reportClientEvent("hls-unsupported", navigator.userAgent || "unknown browser");
 }
 
 function destroyHls() {
@@ -311,6 +417,10 @@ async function stopPlayback() {
   const sessionId = state.sessionId;
   state.sessionId = null;
   state.streamId = null;
+  state.currentChannel = null;
+  state.lastPlayResult = null;
+  state.autoFallbackAttempted = false;
+  state.baseStreamStatus = "";
   destroyHls();
   video.pause();
   video.removeAttribute("src");
@@ -326,6 +436,31 @@ async function stopPlayback() {
     } catch (_) {}
   }
 }
+
+video.addEventListener("playing", () => {
+  if (state.sessionId) {
+    streamStatus.textContent = `${state.baseStreamStatus} • playing`;
+    reportClientEvent("video-playing", `readyState=${video.readyState}`, "info");
+  }
+});
+
+video.addEventListener("waiting", () => {
+  if (state.sessionId) {
+    streamStatus.textContent = `${state.baseStreamStatus} • buffering…`;
+  }
+});
+
+video.addEventListener("stalled", () => {
+  if (state.sessionId) reportClientEvent("video-stalled", `readyState=${video.readyState} networkState=${video.networkState}`);
+});
+
+video.addEventListener("error", async () => {
+  if (!state.sessionId) return;
+  const detail = mediaErrorText();
+  streamStatus.textContent = `${state.baseStreamStatus} • ${detail}`;
+  await reportClientEvent("video-error", detail);
+  await forceBrowserSafeTranscode(detail);
+});
 
 stopBtn.addEventListener("click", stopPlayback);
 window.addEventListener("beforeunload", () => {

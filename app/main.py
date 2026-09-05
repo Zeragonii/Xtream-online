@@ -45,6 +45,12 @@ class PlayRequest(BaseModel):
     mode: str = "auto"
 
 
+class ClientEventRequest(BaseModel):
+    event: str = Field(min_length=1, max_length=128)
+    detail: str = Field(default="", max_length=2000)
+    level: str = Field(default="warning", max_length=16)
+
+
 def configured_client() -> XtreamClient:
     config = store.get()
     if not config:
@@ -169,6 +175,46 @@ async def play(stream_id: int, payload: PlayRequest) -> dict:
         "mode": session.mode,
         "source_codecs": session.source_codecs,
     }
+
+
+@app.get("/api/session/{session_id}/diagnostics")
+async def session_diagnostics(session_id: str) -> dict:
+    session = await session_manager.touch(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Stream session not found")
+
+    playlist = session.directory / "index.m3u8"
+    segments = sorted(session.directory.glob("segment_*.ts"))
+    stderr_tail = list(session.stderr_lines)[-20:]
+    return {
+        "session_id": session.id,
+        "stream_id": session.stream_id,
+        "mode": session.mode,
+        "source_codecs": session.source_codecs,
+        "process_alive": session.process.returncode is None,
+        "process_returncode": session.process.returncode,
+        "playlist_exists": playlist.exists(),
+        "playlist_bytes": playlist.stat().st_size if playlist.exists() else 0,
+        "segment_count": len(segments),
+        "newest_segment_bytes": segments[-1].stat().st_size if segments else 0,
+        "stderr_tail": stderr_tail,
+    }
+
+
+@app.post("/api/session/{session_id}/client-event")
+async def session_client_event(session_id: str, payload: ClientEventRequest) -> dict:
+    session = session_manager.sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Stream session not found")
+
+    detail = payload.detail.replace("\n", " ").replace("\r", " ")[:2000]
+    message = "Browser event session=%s stream=%s event=%s detail=%s"
+    args = (session.id[:8], session.stream_id, payload.event, detail or "-")
+    if payload.level.lower() == "info":
+        logger.info(message, *args)
+    else:
+        logger.warning(message, *args)
+    return {"ok": True}
 
 
 @app.delete("/api/session/{session_id}")

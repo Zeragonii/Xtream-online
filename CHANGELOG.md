@@ -2,7 +2,16 @@
 
 Release Please maintains this file from Conventional Commit messages.
 
-## Unreleased (v0.1.2)
+## Unreleased (v0.1.3)
+
+- Stop silently swallowing browser `video.play()` failures; show an explicit “press Play” state when autoplay is blocked.
+- Report browser-side hls.js and media-element failures back into the Docker logs without exposing provider credentials.
+- Add `GET /api/session/<id>/diagnostics` with FFmpeg process state, HLS file health, segment counts and redacted FFmpeg stderr.
+- Follow the canonical hls.js MediaSource attachment lifecycle before loading the HLS playlist.
+- Automatically retry Auto-mode remux sessions in forced H.264/AAC transcode mode when the browser reports a fatal media/decode error.
+- Surface player buffering, playing, stalled, network recovery and fatal HLS states in the UI.
+
+## v0.1.2
 
 - Make channel startup single-flight so duplicate clicks/requests reuse one FFmpeg session instead of racing and evicting each other.
 - Disable channel buttons while a stream is opening and explicitly release the previous session before changing channels.

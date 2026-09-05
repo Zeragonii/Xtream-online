@@ -232,3 +232,41 @@ def test_duplicate_concurrent_start_spawns_one_process(monkeypatch):
         await manager.stop_all()
 
     asyncio.run(run_test())
+
+
+def test_session_diagnostics_reports_hls_health_without_upstream(tmp_path):
+    from app.main import session_diagnostics
+    from app.sessions import StreamSession, session_manager
+    from collections import deque
+
+    class FakeProcess:
+        returncode = None
+
+    session_id = "diagtest123"
+    playlist = tmp_path / "index.m3u8"
+    segment = tmp_path / "segment_000000.ts"
+    playlist.write_text("#EXTM3U\n#EXTINF:2.0,\nsegment_000000.ts\n")
+    segment.write_bytes(b"test-segment")
+    upstream = "http://provider.example/live/secret-user/secret-password/123.ts"
+
+    session_manager.sessions[session_id] = StreamSession(
+        id=session_id,
+        stream_id=123,
+        upstream_url=upstream,
+        directory=tmp_path,
+        process=FakeProcess(),
+        mode="copy",
+        source_codecs={"video": "h264", "audio": "aac"},
+        stderr_lines=deque(["Input #0, mpegts, from '<upstream>':"]),
+    )
+    try:
+        result = asyncio.run(session_diagnostics(session_id))
+    finally:
+        session_manager.sessions.pop(session_id, None)
+
+    assert result["process_alive"] is True
+    assert result["playlist_exists"] is True
+    assert result["segment_count"] == 1
+    assert result["newest_segment_bytes"] == len(b"test-segment")
+    assert upstream not in str(result)
+    assert "secret-password" not in str(result)
