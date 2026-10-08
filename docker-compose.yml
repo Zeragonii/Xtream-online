@@ -13,10 +13,22 @@ services:
       SESSION_IDLE_TIMEOUT: "35"
       FFMPEG_MODE: auto
       PROVIDER_RELEASE_DELAY: "0.5"
+
+      # Timeout controls (seconds)
+      XTREAM_AUTH_TIMEOUT: "30"
+      CATALOG_API_TIMEOUT: "30"
+      STREAM_IO_TIMEOUT: "12"
+      SESSION_START_TIMEOUT: "12"
+      CODEC_PROBE_TIMEOUT: "4"
+      M3U_TIMEOUT: "6"
+      EPG_TIMEOUT: "120"
+      UPDATE_CHECK_TIMEOUT: "4"
+
       CATALOG_REFRESH_INTERVAL: "900"
       EPG_REFRESH_INTERVAL: "21600"
       UPDATE_CHECK_ENABLED: "true"
       UPDATE_CHECK_INTERVAL: "900"
+      # XTREAM_TIMEOUT is deprecated; if set, it is only a fallback for the first three provider timeout variables above.
       # UPDATE_CHECK_ENABLED can be set to "false" for a fully offline UI.
       # Optional override if a provider advertises an unusual stream host/port.
       # XTREAM_STREAM_BASE_URL: http://provider.example:80

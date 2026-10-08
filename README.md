@@ -123,9 +123,11 @@ The included `docker-compose.yml` can be pasted directly into a Portainer Stack 
 | --- | --- | --- |
 | `MAX_ACTIVE_STREAMS` | `1` | Maximum simultaneous FFmpeg/upstream sessions |
 | `SESSION_IDLE_TIMEOUT` | `35` | Seconds without HLS requests before a session is killed |
-| `SESSION_START_TIMEOUT` | `12` | Seconds allowed for FFmpeg to produce its first HLS playlist |
-| `XTREAM_TIMEOUT` | `12` | Provider/API and FFmpeg HTTP timeout |
-| `CODEC_PROBE_TIMEOUT` | `4` | Maximum seconds to wait for FFmpeg input codec metadata |
+| `XTREAM_AUTH_TIMEOUT` | `30` | HTTP timeout for Player API authentication/server metadata |
+| `CATALOG_API_TIMEOUT` | `30` | HTTP timeout for category/channel catalogue API requests |
+| `STREAM_IO_TIMEOUT` | `12` | FFmpeg upstream network read/write timeout |
+| `SESSION_START_TIMEOUT` | `12` | Hard wait for FFmpeg to produce its first HLS playlist |
+| `CODEC_PROBE_TIMEOUT` | `4` | Hard wait for FFmpeg input codec metadata |
 | `FFMPEG_MODE` | `auto` | UI/default mode: `auto`, `copy`, or `transcode` |
 | `FFMPEG_VIDEO_ENCODER` | `libx264` | Video encoder used in transcode mode |
 | `FFMPEG_VIDEO_PRESET` | `veryfast` | FFmpeg video preset |
@@ -134,14 +136,19 @@ The included `docker-compose.yml` can be pasted directly into a Portainer Stack 
 | `PROVIDER_CACHE_TTL` | `600` | Seconds to cache Player API auth/server metadata for playback |
 | `CATALOG_REFRESH_INTERVAL` | `900` | Seconds between background category/channel catalogue refreshes |
 | `EPG_REFRESH_INTERVAL` | `21600` | Seconds between background XMLTV/EPG refreshes (default 6 hours) |
-| `EPG_TIMEOUT` | `60` | Maximum seconds allowed for the XMLTV download |
+| `EPG_TIMEOUT` | `120` | HTTP inactivity timeout while downloading XMLTV/EPG data |
 | `EPG_MAX_BYTES` | `150000000` | Hard maximum XMLTV download size in bytes |
 | `EPG_HORIZON_HOURS` | `72` | Future guide window retained in SQLite |
 | `EPG_PAST_HOURS` | `6` | Previous programme hours retained in SQLite |
-| `M3U_TIMEOUT` | `6` | Timeout for last-resort `get.php` stream discovery |
+| `M3U_TIMEOUT` | `6` | HTTP timeout for last-resort `get.php` stream discovery |
 | `XTREAM_STREAM_BASE_URL` | unset | Optional manual streaming base override for unusual providers |
 | `HLS_TIME` | `2` | Target HLS segment length in seconds |
 | `HLS_LIST_SIZE` | `12` | Number of HLS segments retained in the live playlist |
+| `UPDATE_CHECK_TIMEOUT` | `4` | HTTP timeout for GitHub update checks |
+
+`XTREAM_TIMEOUT` is retained as a deprecated compatibility fallback for existing deployments. If set, it supplies the value for `XTREAM_AUTH_TIMEOUT`, `CATALOG_API_TIMEOUT`, and `STREAM_IO_TIMEOUT` only when the corresponding new variable is absent. New deployments should use the purpose-specific variables above.
+
+HTTP timeouts are inactivity/network-operation limits rather than whole-job deadlines. `SESSION_START_TIMEOUT` and `CODEC_PROBE_TIMEOUT` are explicit overall waits inside Xtream Online.
 
 Provider credentials can also be supplied entirely through container environment variables:
 

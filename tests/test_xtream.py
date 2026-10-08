@@ -453,3 +453,70 @@ def test_epg_frontend_and_refresh_controls_exist():
 def test_epg_refresh_interval_is_configurable():
     from app.config import settings
     assert settings.epg_refresh_interval >= 300
+
+
+def test_timeout_settings_are_decoupled():
+    from app.config import settings
+
+    assert settings.xtream_auth_timeout > 0
+    assert settings.catalog_api_timeout > 0
+    assert settings.stream_io_timeout > 0
+    assert settings.session_start_timeout > 0
+    assert settings.codec_probe_timeout > 0
+    assert settings.m3u_timeout > 0
+    assert settings.epg_timeout > 0
+    assert settings.update_check_timeout > 0
+    assert not hasattr(settings, "xtream_timeout")
+
+
+def test_ffmpeg_uses_stream_io_timeout(tmp_path):
+    from app.config import settings
+
+    manager = StreamSessionManager()
+    command = manager._ffmpeg_command(
+        "http://provider.example/live/user/pass/123.ts",
+        tmp_path,
+        "copy",
+    )
+    index = command.index("-rw_timeout")
+    assert command[index + 1] == str(int(settings.stream_io_timeout * 1_000_000))
+
+
+def test_xtream_operations_use_purpose_specific_timeouts(monkeypatch):
+    from app.config import settings
+
+    client = XtreamClient(
+        ProviderConfig(
+            base_url="http://provider.example",
+            username="demo",
+            password="secret",
+            output="ts",
+        )
+    )
+    calls = []
+
+    async def fake_get(action=None, *, timeout=None, **extra):
+        calls.append((action, timeout))
+        if action is None:
+            return {"user_info": {"auth": 1, "status": "Active"}, "server_info": {}}
+        return []
+
+    monkeypatch.setattr(client, "_get", fake_get)
+    asyncio.run(client.authenticate(force=True))
+    asyncio.run(client.live_categories())
+    asyncio.run(client.live_streams())
+
+    assert calls[0] == (None, settings.xtream_auth_timeout)
+    assert calls[1] == ("get_live_categories", settings.catalog_api_timeout)
+    assert calls[2] == ("get_live_streams", settings.catalog_api_timeout)
+
+
+def test_timeout_legacy_fallback_and_specific_override(monkeypatch):
+    from app.config import _env_float_compat
+
+    monkeypatch.setenv("XTREAM_TIMEOUT", "41")
+    monkeypatch.delenv("XTREAM_AUTH_TIMEOUT", raising=False)
+    assert _env_float_compat("XTREAM_AUTH_TIMEOUT", 30.0) == 41.0
+
+    monkeypatch.setenv("XTREAM_AUTH_TIMEOUT", "23")
+    assert _env_float_compat("XTREAM_AUTH_TIMEOUT", 30.0) == 23.0

@@ -128,7 +128,7 @@ class StreamSessionManager:
             "info" if probe_input else settings.ffmpeg_loglevel,
             "-nostdin",
             "-rw_timeout",
-            str(int(settings.xtream_timeout * 1_000_000)),
+            str(int(settings.stream_io_timeout * 1_000_000)),
             "-fflags",
             "+genpts+discardcorrupt",
             "-i",

@@ -139,12 +139,18 @@ class XtreamClient:
 
     def _client(self, timeout: int | float | None = None) -> httpx.AsyncClient:
         return httpx.AsyncClient(
-            timeout=timeout or settings.xtream_timeout,
+            timeout=settings.xtream_auth_timeout if timeout is None else timeout,
             follow_redirects=True,
             headers={"User-Agent": f"Xtream-Online/{settings.app_version}"},
         )
 
-    async def _get(self, action: str | None = None, **extra: str | int) -> object:
+    async def _get(
+        self,
+        action: str | None = None,
+        *,
+        timeout: int | float | None = None,
+        **extra: str | int,
+    ) -> object:
         params: dict[str, str | int] = {
             "username": self.config.username,
             "password": self.config.password,
@@ -154,7 +160,7 @@ class XtreamClient:
         params.update(extra)
 
         try:
-            async with self._client() as client:
+            async with self._client(timeout) as client:
                 response = await client.get(self.api_url, params=params)
                 response.raise_for_status()
                 return await asyncio.to_thread(json.loads, response.content)
@@ -170,7 +176,7 @@ class XtreamClient:
         if not force and cached and time.monotonic() - cached[0] < settings.provider_cache_ttl:
             return cached[1]
 
-        data = await self._get()
+        data = await self._get(timeout=settings.xtream_auth_timeout)
         if not isinstance(data, dict):
             raise XtreamError("Unexpected authentication response")
         user_info = data.get("user_info") or {}
@@ -182,7 +188,7 @@ class XtreamClient:
         return data
 
     async def live_categories(self) -> list[dict]:
-        data = await self._get("get_live_categories")
+        data = await self._get("get_live_categories", timeout=settings.catalog_api_timeout)
         if not isinstance(data, list):
             raise XtreamError("Unexpected live categories response")
         return [
@@ -197,7 +203,7 @@ class XtreamClient:
 
     async def live_streams(self, category_id: str | None = None) -> list[dict]:
         extra = {"category_id": category_id} if category_id else {}
-        data = await self._get("get_live_streams", **extra)
+        data = await self._get("get_live_streams", timeout=settings.catalog_api_timeout, **extra)
         if not isinstance(data, list):
             raise XtreamError("Unexpected live streams response")
 

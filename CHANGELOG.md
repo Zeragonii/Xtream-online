@@ -2,6 +2,14 @@
 
 Release Please maintains this file from Conventional Commit messages.
 
+## Unreleased (v0.1.8)
+
+- Decouple provider/API, catalogue, stream I/O, session startup, codec probe, M3U fallback, EPG, and update-check timeouts.
+- Add purpose-specific Docker environment variables for every timeout path.
+- Increase the default Xtream authentication/catalogue timeout to 30 seconds for sluggish providers.
+- Increase the default EPG download timeout to 120 seconds.
+- Keep `XTREAM_TIMEOUT` as a deprecated compatibility fallback when the new purpose-specific variables are not set.
+
 ## Unreleased (v0.1.7)
 
 - Add a persistent background XMLTV/EPG cache backed by SQLite.

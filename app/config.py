@@ -19,15 +19,33 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_float_compat(name: str, default: float, legacy_name: str = "XTREAM_TIMEOUT") -> float:
+    """Read a purpose-specific timeout with XTREAM_TIMEOUT as a legacy fallback.
+
+    Explicit per-purpose variables always win. This keeps existing deployments
+    that set XTREAM_TIMEOUT working while allowing every network path to be tuned
+    independently from v0.1.8 onward.
+    """
+    if os.getenv(name) is not None:
+        return _env_float(name, default)
+    if os.getenv(legacy_name) is not None:
+        return _env_float(legacy_name, default)
+    return default
+
+
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path = Path(os.getenv("DATA_DIR", "/data"))
     hls_dir: Path = Path(os.getenv("HLS_DIR", "/tmp/xtream-online/hls"))
     max_active_streams: int = max(1, _env_int("MAX_ACTIVE_STREAMS", 1))
     session_idle_timeout: int = max(10, _env_int("SESSION_IDLE_TIMEOUT", 35))
+    # Network/startup timeouts are deliberately independent. XTREAM_TIMEOUT is
+    # retained only as a deprecated fallback for older Compose deployments.
+    xtream_auth_timeout: float = max(3.0, _env_float_compat("XTREAM_AUTH_TIMEOUT", 30.0))
+    catalog_api_timeout: float = max(3.0, _env_float_compat("CATALOG_API_TIMEOUT", 30.0))
+    stream_io_timeout: float = max(3.0, _env_float_compat("STREAM_IO_TIMEOUT", 12.0))
     session_start_timeout: float = max(3.0, _env_float("SESSION_START_TIMEOUT", 12.0))
     codec_probe_timeout: float = max(1.0, _env_float("CODEC_PROBE_TIMEOUT", 4.0))
-    xtream_timeout: int = max(3, _env_int("XTREAM_TIMEOUT", 12))
     ffmpeg_loglevel: str = os.getenv("FFMPEG_LOGLEVEL", "warning")
     ffmpeg_mode: str = os.getenv("FFMPEG_MODE", "auto").lower()
     ffmpeg_video_encoder: str = os.getenv("FFMPEG_VIDEO_ENCODER", "libx264")
@@ -37,7 +55,7 @@ class Settings:
     provider_cache_ttl: float = max(10.0, _env_float("PROVIDER_CACHE_TTL", 600.0))
     catalog_refresh_interval: float = max(60.0, _env_float("CATALOG_REFRESH_INTERVAL", 900.0))
     epg_refresh_interval: float = max(300.0, _env_float("EPG_REFRESH_INTERVAL", 21600.0))
-    epg_timeout: float = max(5.0, _env_float("EPG_TIMEOUT", 60.0))
+    epg_timeout: float = max(5.0, _env_float("EPG_TIMEOUT", 120.0))
     epg_max_bytes: int = max(5_000_000, _env_int("EPG_MAX_BYTES", 150_000_000))
     epg_horizon_hours: int = max(12, _env_int("EPG_HORIZON_HOURS", 72))
     epg_past_hours: int = max(0, _env_int("EPG_PAST_HOURS", 6))
